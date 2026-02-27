@@ -1,16 +1,42 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import React from 'react';
-import { useColorScheme } from 'react-native';
+import { Slot, useRouter, useSegments } from 'expo-router';
+import { useEffect } from 'react';
+import { ActivityIndicator, View } from 'react-native';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
+import { useStore } from '../lib/store';
+import { Theme } from '../theme';
 
-import { AnimatedSplashOverlay } from '@/components/animated-icon';
-import AppTabs from '@/components/app-tabs';
+export default function RootLayout() {
+    const { currentUser, restoreSession, isLoading } = useStore();
+    const segments = useSegments();
+    const router = useRouter();
 
-export default function TabLayout() {
-  const colorScheme = useColorScheme();
-  return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <AnimatedSplashOverlay />
-      <AppTabs />
-    </ThemeProvider>
-  );
+    useEffect(() => {
+        restoreSession();
+    }, []);
+
+    useEffect(() => {
+        if (isLoading) return;
+
+        const inTabsGroup = segments[0] === '(tabs)';
+
+        if (currentUser && !inTabsGroup) {
+            router.replace('/(tabs)/letters');
+        } else if (!currentUser && segments[0] !== 'onboarding') {
+            router.replace('/onboarding');
+        }
+    }, [currentUser, isLoading, segments, router]);
+
+    if (isLoading) {
+        return (
+            <View style={{ flex: 1, backgroundColor: Theme.colors.background, justifyContent: 'center', alignItems: 'center' }}>
+                <ActivityIndicator size="large" color={Theme.colors.accent} />
+            </View>
+        );
+    }
+
+    return (
+        <KeyboardProvider>
+            <Slot />
+        </KeyboardProvider>
+    );
 }
