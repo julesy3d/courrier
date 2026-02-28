@@ -8,6 +8,7 @@ import { Theme } from '../../theme';
 
 export default function LetterDetailScreen() {
     const { id } = useLocalSearchParams<{ id: string }>();
+    console.log('Letter detail opened, id:', id);
     const { currentUser, fetchReceivedLetters, markLetterOpened, loadUserById } = useStore();
 
     const [letter, setLetter] = useState<any>(null);

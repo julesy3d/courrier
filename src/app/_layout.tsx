@@ -26,11 +26,13 @@ export default function RootLayout() {
     useEffect(() => {
         if (isLoading) return;
 
-        const inTabsGroup = segments[0] === '(tabs)';
+        const isAuthRoute = segments[0] === 'onboarding';
 
-        if (currentUser && !inTabsGroup) {
-            router.replace('/(tabs)/compose');
-        } else if (!currentUser && segments[0] !== 'onboarding') {
+        if (currentUser) {
+            if (!segments[0] || isAuthRoute) {
+                router.replace('/(tabs)/compose');
+            }
+        } else if (!currentUser && !isAuthRoute) {
             router.replace('/onboarding');
         }
     }, [currentUser, isLoading, segments, router]);
