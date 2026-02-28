@@ -1,6 +1,7 @@
-import { useLocalSearchParams } from 'expo-router';
+import { Stack, useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import Postcard from '../../components/Postcard';
 import { useTranslation } from '../../lib/i18n';
 import { AppUser, useStore } from '../../lib/store';
@@ -69,7 +70,15 @@ export default function LetterDetailScreen() {
     });
 
     return (
-        <View style={styles.container}>
+        <SafeAreaView style={styles.container} edges={['top']}>
+            <Stack.Screen options={{
+                headerShown: true,
+                headerTitle: '',
+                headerBackTitle: t('letters.tab'),
+                headerStyle: { backgroundColor: Theme.colors.background },
+                headerShadowVisible: false,
+                headerTintColor: Theme.colors.accent,
+            }} />
             <ScrollView
                 style={styles.container}
                 contentContainerStyle={styles.content}
@@ -83,7 +92,7 @@ export default function LetterDetailScreen() {
                     dateStr={dateStr}
                 />
             </ScrollView>
-        </View>
+        </SafeAreaView>
     );
 }
 

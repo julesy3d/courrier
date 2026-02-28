@@ -1,5 +1,6 @@
+import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useTranslation } from '../../lib/i18n';
 import { Letter, useStore } from '../../lib/store';
@@ -25,9 +26,11 @@ export default function LettersScreen() {
         }
     }, [fetchReceivedLetters]);
 
-    useEffect(() => {
-        loadLetters();
-    }, [loadLetters]);
+    useFocusEffect(
+        useCallback(() => {
+            loadLetters();
+        }, [loadLetters])
+    );
 
     const onRefresh = async () => {
         setRefreshing(true);

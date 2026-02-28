@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Animated, Dimensions, Easing, ImageBackground, Keyboard, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useTranslation } from '../lib/i18n';
-import { AppUser } from '../lib/store';
+import { AppUser, useStore } from '../lib/store';
 import { Theme } from '../theme';
 
 const { width: windowWidth } = Dimensions.get('window');
@@ -47,6 +47,7 @@ export default function Postcard({
     onSend, canSend = false
 }: PostcardProps) {
     const { t } = useTranslation();
+    const { currentUser } = useStore();
     const [side, setSide] = useState<'recto' | 'verso'>('recto');
     const [isFlipped, setIsFlipped] = useState(false);
     const flipAnim = useRef(new Animated.Value(0)).current;
@@ -164,7 +165,10 @@ export default function Postcard({
                                 <View style={styles.versoHalf}>
                                     {!isEditable ? (
                                         <View style={{ paddingTop: 30 }}>
-                                            <Text style={[styles.readOnlyText, { fontStyle: 'normal' }]}>{dateStr}</Text>
+                                            <Text style={styles.versoLabel}>{t('letter.detail.from')}</Text>
+                                            <Text style={[styles.readOnlyText, { color: Theme.colors.text }]}>
+                                                {fromAddressUser?.address || 'Unknown'}
+                                            </Text>
                                         </View>
                                     ) : (
                                         <>
@@ -208,8 +212,9 @@ export default function Postcard({
                                         </>
                                     ) : (
                                         <View style={{ paddingTop: 30 }}>
-                                            <Text style={styles.versoText}>
-                                                {`${t('letter.detail.from')} ${fromAddressUser?.address || 'Unknown'}`}
+                                            <Text style={styles.versoLabel}>{t('letter.detail.to')}</Text>
+                                            <Text style={[styles.readOnlyText, { color: Theme.colors.text }]}>
+                                                {currentUser?.address || '—'}
                                             </Text>
                                         </View>
                                     )}
