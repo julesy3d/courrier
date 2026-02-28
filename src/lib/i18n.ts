@@ -48,6 +48,9 @@ const en = {
     'letters.sent': 'Sent',
     'letters.itemTitle': 'A letter',
     'letters.empty': 'No letters yet.\nGive your address to a friend, in person.',
+    'letters.returnedTitle': 'Return to sender',
+    'letters.returnedTo': 'To:',
+    'letters.unknownSender': 'Unknown sender',
 
     // Carnet Tab
     'carnet.tab': 'Address Book',
@@ -121,6 +124,9 @@ const fr = {
     'letters.sent': 'Envoyées',
     'letters.itemTitle': 'Une lettre',
     'letters.empty': 'Pas encore de lettres.\nDonne ton adresse à un ami :)',
+    'letters.returnedTitle': 'Retour à l\'expéditeur',
+    'letters.returnedTo': 'À :',
+    'letters.unknownSender': 'Expéditeur inconnu',
 
     // Carnet Tab
     'carnet.tab': 'Carnet',

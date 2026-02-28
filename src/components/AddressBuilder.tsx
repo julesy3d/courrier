@@ -1,7 +1,7 @@
 import { Picker } from '@react-native-picker/picker';
 import React, { useCallback, useEffect, useState } from 'react';
 import { Modal, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { validateName } from '../lib/dictionary';
+import { validateAddressName } from '../lib/dictionary';
 import { useTranslation } from '../lib/i18n';
 import { Theme } from '../theme';
 
@@ -104,10 +104,11 @@ export default function AddressBuilder({
             setNameError(null);
             return;
         }
-        if (validateName(trimmed, language)) {
+        const result = validateAddressName(trimmed, language);
+        if (result.isValid) {
             setNameError(null);
         } else {
-            setNameError(t('address.error.invalid'));
+            setNameError(result.error || t('address.error.invalid'));
         }
     }, [name, language, setNameError, t]);
 

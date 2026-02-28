@@ -3,12 +3,13 @@ import { useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useTranslation } from '../../lib/i18n';
-import { Letter, useStore } from '../../lib/store';
+import { useStore } from '../../lib/store';
 import { Theme } from '../../theme';
 
 export default function LettersScreen() {
-    const { fetchReceivedLetters } = useStore();
-    const [letters, setLetters] = useState<Letter[]>([]);
+    const { fetchReceivedLetters, fetchReturnedLetters, loadUserById } = useStore();
+    const [letters, setLetters] = useState<any[]>([]);
+    const [senderMap, setSenderMap] = useState<Record<string, string>>({});
     const [isLoading, setIsLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const router = useRouter();
@@ -17,14 +18,34 @@ export default function LettersScreen() {
     const loadLetters = useCallback(async () => {
         setIsLoading(true);
         try {
-            const data = await fetchReceivedLetters();
-            setLetters(data);
+            const [received, returned] = await Promise.all([
+                fetchReceivedLetters(),
+                fetchReturnedLetters(),
+            ]);
+
+            // Mark returned letters so we can style them differently
+            const allLetters = [
+                ...received.map(l => ({ ...l, _type: 'received' as const })),
+                ...returned.map(l => ({ ...l, _type: 'returned' as const })),
+            ].sort((a, b) =>
+                new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime()
+            );
+
+            // Resolve sender addresses for received letters
+            const senderIds = [...new Set(received.map(l => l.sender_id))];
+            const newSenderMap: Record<string, string> = {};
+            for (const sid of senderIds) {
+                const user = await loadUserById(sid);
+                if (user) newSenderMap[sid] = user.address;
+            }
+            setSenderMap(newSenderMap);
+            setLetters(allLetters);
         } catch (e) {
             console.error(e);
         } finally {
             setIsLoading(false);
         }
-    }, [fetchReceivedLetters]);
+    }, [fetchReceivedLetters, fetchReturnedLetters, loadUserById]);
 
     useFocusEffect(
         useCallback(() => {
@@ -38,19 +59,58 @@ export default function LettersScreen() {
         setRefreshing(false);
     };
 
-    const renderItem = ({ item }: { item: Letter }) => {
-        const isUnread = item.opened_at === null;
-        const date = new Date(item.sent_at).toLocaleDateString();
+    const renderItem = ({ item }: { item: any }) => {
+        const isReturned = item._type === 'returned';
+        const isUnread = !isReturned && item.opened_at === null;
+        const date = new Date(isReturned ? item.returned_at : item.sent_at)
+            .toLocaleDateString();
+
+        if (isReturned) {
+            const preview = item.body.length > 40
+                ? item.body.substring(0, 40) + '…'
+                : item.body;
+
+            return (
+                <View style={[styles.row, { opacity: 0.7 }]}>
+                    <View style={{ flex: 1, marginRight: 12 }}>
+                        <Text style={[styles.letterFrom, { color: Theme.colors.accent }]}>
+                            {t('letters.returnedTitle')}
+                        </Text>
+                        <Text style={styles.previewText} numberOfLines={1}>
+                            {t('letters.returnedTo')} {item.recipient_address}
+                        </Text>
+                    </View>
+                    <Text style={styles.dateText}>{date}</Text>
+                </View>
+            );
+        }
+
+        // Regular received letter (existing code)
+        const senderAddress = senderMap[item.sender_id] || t('letters.unknownSender');
+        const preview = item.body.length > 40
+            ? item.body.substring(0, 40) + '…'
+            : item.body;
 
         return (
             <TouchableOpacity
                 style={styles.row}
                 onPress={() => router.push(`/letter/${item.id}` as any)}
             >
-                <View style={styles.rowContent}>
-                    {isUnread && <View style={styles.unreadDot} />}
-                    <Text style={[styles.letterTitle, { color: isUnread ? Theme.colors.accent : Theme.colors.text }]}>
-                        {t('letters.itemTitle')}
+                <View style={{ flex: 1, marginRight: 12 }}>
+                    <View style={styles.rowContent}>
+                        {isUnread && <View style={styles.unreadDot} />}
+                        <Text
+                            style={[styles.letterFrom, {
+                                color: isUnread ? Theme.colors.text : Theme.colors.secondary,
+                                fontWeight: isUnread ? '600' : '400',
+                            }]}
+                            numberOfLines={1}
+                        >
+                            {senderAddress}
+                        </Text>
+                    </View>
+                    <Text style={styles.previewText} numberOfLines={1}>
+                        {preview}
                     </Text>
                 </View>
                 <Text style={styles.dateText}>{date}</Text>
@@ -129,8 +189,14 @@ const styles = StyleSheet.create({
         backgroundColor: Theme.colors.accent,
         marginRight: 8,
     },
-    letterTitle: {
+    letterFrom: {
         fontSize: 16,
+    },
+    previewText: {
+        fontSize: 13,
+        color: Theme.colors.secondary,
+        marginTop: 2,
+        marginLeft: 16, // align with text after unread dot
     },
     dateText: {
         fontSize: 13,

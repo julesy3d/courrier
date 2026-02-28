@@ -20,6 +20,9 @@ export type Letter = {
     signature: string | null;
     sent_at: string;
     opened_at: string | null;
+    delivers_at: string | null;
+    returned_at: string | null;
+    notified: boolean;
 };
 
 export type AddressBookEntry = {
@@ -47,6 +50,7 @@ interface AuthState {
     // New Methods
     fetchReceivedLetters: () => Promise<Letter[]>;
     fetchSentLetters: () => Promise<Letter[]>;
+    fetchReturnedLetters: () => Promise<Letter[]>;
     sendLetter: (body: string, recipientAddress: string) => Promise<void>;
     markLetterOpened: (letterId: string) => Promise<void>;
     loadUserById: (userId: string) => Promise<AppUser | null>;
@@ -206,11 +210,30 @@ export const useStore = create<AuthState>((set, get) => ({
             .from('letters')
             .select('*')
             .eq('recipient_id', currentUser.id)
+            .lte('delivers_at', new Date().toISOString())
             .gte('sent_at', currentUser.created_at)
             .order('sent_at', { ascending: false });
 
         if (error) {
             console.error('Error fetching received letters', error);
+            throw error;
+        }
+        return data as Letter[];
+    },
+
+    fetchReturnedLetters: async () => {
+        const { currentUser } = get();
+        if (!currentUser) return [];
+
+        const { data, error } = await supabase
+            .from('letters')
+            .select('*')
+            .eq('sender_id', currentUser.id)
+            .not('returned_at', 'is', null)
+            .order('returned_at', { ascending: false });
+
+        if (error) {
+            console.error('Error fetching returned letters', error);
             throw error;
         }
         return data as Letter[];
