@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Modal, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Swipeable } from 'react-native-gesture-handler';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import AddressBuilder, { ENGLISH_TYPES, FRENCH_TYPES } from '../../components/AddressBuilder';
 import { useTranslation } from '../../lib/i18n';
@@ -74,7 +75,7 @@ export default function AddressesScreen() {
 
     // Handle Delete Contact
     const confirmDelete = (entry: AddressBookEntry) => {
-        Alert.alert(t('carnet.delete'), `Are you sure you want to delete ${entry.name}?`, [
+        Alert.alert(t('carnet.delete'), t('carnet.deleteConfirm').replace('{name}', entry.name), [
             { text: t('common.cancel'), style: 'cancel' },
             {
                 text: t('carnet.delete'),
@@ -147,16 +148,32 @@ export default function AddressesScreen() {
         }
     };
 
-    const renderItem = ({ item }: { item: AddressBookEntry }) => (
-        <TouchableOpacity
-            style={styles.row}
-            onLongPress={() => confirmDelete(item)}
-            activeOpacity={0.7}
-        >
-            <Text style={styles.entryName}>{item.name}</Text>
-            <Text style={styles.entryAddress}>{item.address}</Text>
-        </TouchableOpacity>
-    );
+    const renderItem = ({ item }: { item: AddressBookEntry }) => {
+        const renderRightActions = () => (
+            <TouchableOpacity
+                style={{
+                    backgroundColor: Theme.colors.accent,
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    width: 80,
+                }}
+                onPress={() => confirmDelete(item)}
+            >
+                <Text style={{ color: '#FFFFFF', fontSize: 14, fontWeight: '600' }}>
+                    {t('carnet.delete')}
+                </Text>
+            </TouchableOpacity>
+        );
+
+        return (
+            <Swipeable renderRightActions={renderRightActions}>
+                <View style={[styles.row, { backgroundColor: Theme.colors.background }]}>
+                    <Text style={styles.entryName}>{item.name}</Text>
+                    <Text style={styles.entryAddress}>{item.address}</Text>
+                </View>
+            </Swipeable>
+        );
+    };
 
     return (
         <View style={styles.container}>
@@ -179,7 +196,9 @@ export default function AddressesScreen() {
                     </View>
                 ) : entries.length === 0 ? (
                     <View style={styles.centered}>
-                        <Text style={styles.emptyText}>{t('carnet.empty')}</Text>
+                        <Text style={[styles.emptyText, { textAlign: 'center', paddingHorizontal: 40 }]}>
+                            {t('carnet.empty')}
+                        </Text>
                     </View>
                 ) : (
                     <FlatList

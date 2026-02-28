@@ -65,6 +65,7 @@ export default function OnboardingScreen() {
             }
 
             await createUser(assembledAddress, language);
+            setLocaleOverride(null);
             // Navigation is handled automatically by the _layout reacting to currentUser change
         } catch (e) {
             setSubmitError(t('address.error.generic'));

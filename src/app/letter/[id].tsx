@@ -1,43 +1,36 @@
 import { useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
+import Postcard from '../../components/Postcard';
 import { useTranslation } from '../../lib/i18n';
 import { AppUser, useStore } from '../../lib/store';
 import { Theme } from '../../theme';
 
 export default function LetterDetailScreen() {
     const { id } = useLocalSearchParams<{ id: string }>();
-    const { currentUser, fetchReceivedLetters, fetchSentLetters, markLetterOpened, loadUserById } = useStore();
+    const { currentUser, fetchReceivedLetters, markLetterOpened, loadUserById } = useStore();
 
     const [letter, setLetter] = useState<any>(null);
     const [contact, setContact] = useState<AppUser | null>(null);
-    const [isSentByMe, setIsSentByMe] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
 
-    const { t } = useTranslation();
+    const { t, locale } = useTranslation();
 
     useEffect(() => {
         async function loadLetter() {
             try {
-                // Determine context from both lists
                 const received = await fetchReceivedLetters();
-                const sent = await fetchSentLetters();
-                const all = [...received, ...sent];
 
-                const found = all.find(l => l.id === id);
+                const found = received.find(l => l.id === id);
+                console.log('Detail: found letter?', !!found, 'id:', id);
                 if (found) {
                     setLetter(found);
 
-                    const isMine = found.sender_id === currentUser?.id;
-                    setIsSentByMe(isMine);
-
-                    if (!isMine && found.opened_at === null) {
+                    if (found.opened_at === null) {
                         markLetterOpened(found.id).catch(console.error);
                     }
 
-                    if (isMine) {
-                        // Contact is the recipient, we only have recipient_address stored in text
-                    } else if (found.sender_id) {
+                    if (found.sender_id) {
                         const user = await loadUserById(found.sender_id);
                         setContact(user);
                     }
@@ -51,7 +44,7 @@ export default function LetterDetailScreen() {
         if (id && currentUser) {
             loadLetter();
         }
-    }, [id, fetchReceivedLetters, fetchSentLetters, markLetterOpened, loadUserById, currentUser]);
+    }, [id, fetchReceivedLetters, markLetterOpened, loadUserById, currentUser]);
 
     if (isLoading) {
         return (
@@ -70,25 +63,26 @@ export default function LetterDetailScreen() {
         );
     }
 
-    const dateStr = new Date(letter.sent_at).toLocaleString('en-US', {
+    const dateStr = new Date(letter.sent_at).toLocaleDateString(locale, {
         dateStyle: 'full',
-        timeStyle: 'short',
     });
 
     return (
-        <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-            <Text style={styles.bodyText}>{letter.body}</Text>
-
-            <View style={styles.footer}>
-                <Text style={styles.senderText}>
-                    {isSentByMe
-                        ? `${t('letter.detail.to')} ${letter.recipient_address}`
-                        : `${t('letter.detail.from')} ${contact?.address || 'Unknown'}`
-                    }
-                </Text>
-                <Text style={styles.dateText}>{dateStr}</Text>
-            </View>
-        </ScrollView>
+        <View style={styles.container}>
+            <ScrollView
+                style={styles.container}
+                contentContainerStyle={styles.content}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+            >
+                <Postcard
+                    mode="view"
+                    body={letter.body}
+                    fromAddressUser={contact}
+                    dateStr={dateStr}
+                />
+            </ScrollView>
+        </View>
     );
 }
 
@@ -103,30 +97,11 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     content: {
-        padding: Theme.sizes.horizontalPadding,
-        paddingTop: 24,
-        paddingBottom: 40,
-    },
-    bodyText: {
-        fontFamily: Theme.fonts.body,
-        fontSize: 18,
-        lineHeight: 18 + Theme.sizes.lineSpacing,
-        color: Theme.colors.text,
-        marginBottom: 40,
-    },
-    footer: {
-        borderTopWidth: StyleSheet.hairlineWidth,
-        borderTopColor: '#E5E5E5',
-        paddingTop: 16,
-    },
-    senderText: {
-        fontSize: 13,
-        color: Theme.colors.secondary,
-        marginBottom: 4,
-    },
-    dateText: {
-        fontSize: 13,
-        color: Theme.colors.secondary,
+        paddingTop: 40,
+        paddingBottom: 60,
+        paddingHorizontal: 40,
+        flexGrow: 1,
+        alignItems: 'center',
     },
     errorText: {
         fontSize: 13,

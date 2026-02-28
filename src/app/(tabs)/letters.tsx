@@ -5,34 +5,29 @@ import { useTranslation } from '../../lib/i18n';
 import { Letter, useStore } from '../../lib/store';
 import { Theme } from '../../theme';
 
-type FilterType = 'received' | 'sent';
-
 export default function LettersScreen() {
-    const { fetchReceivedLetters, fetchSentLetters } = useStore();
+    const { fetchReceivedLetters } = useStore();
     const [letters, setLetters] = useState<Letter[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
-    const [filter, setFilter] = useState<FilterType>('received');
     const router = useRouter();
     const { t } = useTranslation();
 
     const loadLetters = useCallback(async () => {
+        setIsLoading(true);
         try {
-            let data;
-            if (filter === 'received') {
-                data = await fetchReceivedLetters();
-            } else {
-                data = await fetchSentLetters();
-            }
+            const data = await fetchReceivedLetters();
             setLetters(data);
         } catch (e) {
             console.error(e);
+        } finally {
+            setIsLoading(false);
         }
     }, [fetchReceivedLetters]);
 
     useEffect(() => {
-        loadLetters().finally(() => setIsLoading(false));
-    }, [loadLetters, filter]);
+        loadLetters();
+    }, [loadLetters]);
 
     const onRefresh = async () => {
         setRefreshing(true);
@@ -41,8 +36,7 @@ export default function LettersScreen() {
     };
 
     const renderItem = ({ item }: { item: Letter }) => {
-        const isReceivedList = filter === 'received';
-        const isUnread = isReceivedList && item.opened_at === null;
+        const isUnread = item.opened_at === null;
         const date = new Date(item.sent_at).toLocaleDateString();
 
         return (
@@ -71,28 +65,12 @@ export default function LettersScreen() {
 
     return (
         <View style={styles.container}>
-            <View style={styles.headerToggle}>
-                <TouchableOpacity
-                    style={[styles.toggleButton, filter === 'received' && styles.toggleActive]}
-                    onPress={() => setFilter('received')}
-                >
-                    <Text style={[styles.toggleText, filter === 'received' && styles.toggleTextActive]}>
-                        {t('letters.received')}
-                    </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                    style={[styles.toggleButton, filter === 'sent' && styles.toggleActive]}
-                    onPress={() => setFilter('sent')}
-                >
-                    <Text style={[styles.toggleText, filter === 'sent' && styles.toggleTextActive]}>
-                        {t('letters.sent')}
-                    </Text>
-                </TouchableOpacity>
-            </View>
 
             {letters.length === 0 ? (
                 <View style={styles.centered}>
-                    <Text style={styles.emptyText}>{t('letters.empty')}</Text>
+                    <Text style={[styles.emptyText, { textAlign: 'center', paddingHorizontal: 40 }]}>
+                        {t('letters.empty')}
+                    </Text>
                 </View>
             ) : (
                 <FlatList
@@ -126,32 +104,6 @@ const styles = StyleSheet.create({
     emptyText: {
         fontSize: 13,
         color: Theme.colors.secondary,
-    },
-    headerToggle: {
-        flexDirection: 'row',
-        paddingHorizontal: Theme.sizes.horizontalPadding,
-        paddingTop: 12,
-        paddingBottom: 4,
-        borderBottomWidth: StyleSheet.hairlineWidth,
-        borderBottomColor: '#E5E5E5',
-    },
-    toggleButton: {
-        flex: 1,
-        paddingVertical: 12,
-        alignItems: 'center',
-        borderBottomWidth: 2,
-        borderBottomColor: 'transparent',
-    },
-    toggleActive: {
-        borderBottomColor: Theme.colors.accent,
-    },
-    toggleText: {
-        fontSize: 15,
-        color: Theme.colors.secondary,
-    },
-    toggleTextActive: {
-        color: Theme.colors.accent,
-        fontWeight: '500',
     },
     listContent: {
         paddingVertical: 8,

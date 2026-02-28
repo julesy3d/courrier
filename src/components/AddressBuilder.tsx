@@ -75,6 +75,7 @@ const CompactPicker = ({
                             selectedValue={tempValue}
                             onValueChange={setTempValue}
                             style={{ paddingBottom: 20 }}
+                            itemStyle={{ color: Theme.colors.text }}
                         >
                             {options.map(opt => <Picker.Item key={opt} label={opt} value={opt} />)}
                         </Picker>

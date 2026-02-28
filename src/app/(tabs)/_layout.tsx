@@ -8,6 +8,7 @@ export default function TabsLayout() {
 
     return (
         <Tabs
+            initialRouteName="compose"
             screenOptions={{
                 headerShown: true,
                 tabBarActiveTintColor: Theme.colors.accent,
@@ -26,7 +27,7 @@ export default function TabsLayout() {
             <Tabs.Screen
                 name="compose"
                 options={{
-                    title: t('compose.send'), // or a dedicated navigation word if desired
+                    title: t('compose.tab'),
                     tabBarIcon: ({ color, size }) => <Ionicons name="pencil" size={size} color={color} />,
                 }}
             />
@@ -37,13 +38,7 @@ export default function TabsLayout() {
                     tabBarIcon: ({ color, size }) => <Ionicons name="book" size={size} color={color} />,
                 }}
             />
-            {/* Remove the placeholder index screen */}
-            <Tabs.Screen
-                name="index"
-                options={{
-                    href: null,
-                }}
-            />
+            {/* Extraneous index screen removed */}
         </Tabs>
     );
 }

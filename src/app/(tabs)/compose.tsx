@@ -1,18 +1,23 @@
+import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Keyboard, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
+import React, { useRef, useState } from 'react';
+import { ActivityIndicator, Animated, Dimensions, Easing, Keyboard, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import Postcard from '../../components/Postcard';
 import { useTranslation } from '../../lib/i18n';
 import { useStore } from '../../lib/store';
 import { Theme } from '../../theme';
 
-type ComposeStep = 'write' | 'envelope' | 'sending' | 'sent';
+const { height: screenHeight } = Dimensions.get('window');
+
+type ComposeStep = 'compose' | 'sending' | 'sent';
 
 export default function ComposeScreen() {
     const { currentUser, sendLetter } = useStore();
     const { t } = useTranslation();
 
-    const [step, setStep] = useState<ComposeStep>('write');
+    const [step, setStep] = useState<ComposeStep>('compose');
+    const [cardKey, setCardKey] = useState(0);
 
     const [body, setBody] = useState('');
     const [toName, setToName] = useState('');
@@ -20,170 +25,120 @@ export default function ComposeScreen() {
     const [fromName, setFromName] = useState('');
 
     const [sendError, setSendError] = useState<string | null>(null);
+    const sendAnim = useRef(new Animated.Value(0)).current;
 
-    const MAX_CHARS = 300;
-    const canProceedToStep2 = body.trim().length > 0;
     const canSend = body.trim().length > 0 && toAddress.trim().length > 0;
 
     const handleSend = async () => {
         if (!canSend || step === 'sending') return;
-        setStep('sending');
         setSendError(null);
         Keyboard.dismiss();
 
+        Animated.parallel([
+            Animated.timing(sendAnim, {
+                toValue: 1,
+                duration: 800,
+                easing: Easing.in(Easing.ease),
+                useNativeDriver: true,
+            }),
+        ]).start();
+
+        const sendStart = Date.now();
+        setStep('sending');
+
         try {
             await sendLetter(body.trim(), toAddress.trim());
-            setStep('sent');
-        } catch (e) {
-            setSendError(t('compose.error'));
-            setStep('envelope'); // kick back to envelope editable state
-        }
-    };
 
-    useEffect(() => {
-        if (step === 'sent') {
-            const timer = setTimeout(() => {
+            const elapsed = Date.now() - sendStart;
+            if (elapsed < 2800) {
+                await new Promise(resolve => setTimeout(resolve, 2800 - elapsed));
+            }
+
+            setStep('sent');
+            setTimeout(() => {
                 setBody('');
                 setToName('');
                 setToAddress('');
                 setFromName('');
-                setStep('write');
-            }, 2500);
-            return () => clearTimeout(timer);
+                setSendError(null);
+                sendAnim.setValue(0);
+                setCardKey(k => k + 1); // Reset postcard internal flip side to recto
+                setStep('compose');
+            }, 3000);
+        } catch (e) {
+            Animated.timing(sendAnim, {
+                toValue: 0,
+                duration: 500,
+                useNativeDriver: true,
+            }).start();
+            setSendError(t('compose.error'));
+            setStep('compose');
         }
-    }, [step]);
-
-    const renderStep1 = () => (
-        <View style={styles.stepContainer}>
-            <TextInput
-                style={styles.bodyInput}
-                multiline
-                placeholder={t('compose.prompt')}
-                placeholderTextColor={Theme.colors.secondary + '40'}
-                value={body}
-                onChangeText={(text) => {
-                    if (text.length <= MAX_CHARS) setBody(text);
-                }}
-                textAlignVertical="top"
-            />
-            <View style={styles.step1Footer}>
-                <Text style={[
-                    styles.charCount,
-                    { color: body.length >= 280 ? Theme.colors.accent : Theme.colors.secondary }
-                ]}>
-                    {body.length} / {MAX_CHARS}
-                </Text>
-                <TouchableOpacity
-                    style={[styles.button, !canProceedToStep2 && styles.buttonDisabled, { minWidth: 100 }]}
-                    onPress={() => setStep('envelope')}
-                    disabled={!canProceedToStep2}
-                >
-                    <Text style={styles.buttonText}>{t('compose.next')}</Text>
-                </TouchableOpacity>
-            </View>
-        </View>
-    );
-
-    const renderStep2OrSending = () => {
-        const previewText = body.length > 50 ? body.substring(0, 50) + '…' : body;
-        const isInteractive = step === 'envelope';
-
-        return (
-            <View style={styles.stepContainer}>
-                {/* Preview */}
-                <TouchableOpacity
-                    activeOpacity={0.7}
-                    onPress={() => isInteractive && setStep('write')}
-                    disabled={!isInteractive}
-                >
-                    <Text style={styles.previewText}>"{previewText}"</Text>
-                </TouchableOpacity>
-
-                {/* To Section */}
-                <View style={styles.section}>
-                    <Text style={styles.sectionLabel}>{t('compose.to')}</Text>
-                    <TextInput
-                        style={styles.fieldInput}
-                        placeholder={t('compose.recipientName')}
-                        placeholderTextColor={Theme.colors.secondary}
-                        value={toName}
-                        onChangeText={setToName}
-                        editable={isInteractive}
-                    />
-                    <TextInput
-                        style={styles.fieldInput}
-                        placeholder={t('compose.recipientAddress')}
-                        placeholderTextColor={Theme.colors.secondary}
-                        value={toAddress}
-                        onChangeText={setToAddress}
-                        autoCorrect={false}
-                        autoCapitalize="none"
-                        editable={isInteractive}
-                    />
-                </View>
-
-                {/* From Section */}
-                <View style={styles.section}>
-                    <Text style={styles.sectionLabel}>{t('compose.from')}</Text>
-                    <TextInput
-                        style={styles.fieldInput}
-                        placeholder={t('compose.yourName')}
-                        placeholderTextColor={Theme.colors.secondary}
-                        value={fromName}
-                        onChangeText={setFromName}
-                        editable={isInteractive}
-                    />
-                    <Text style={styles.readOnlyField}>
-                        {currentUser?.address || '—'}
-                    </Text>
-                </View>
-
-                {sendError && <Text style={styles.errorText}>{sendError}</Text>}
-
-                {/* Actions */}
-                <View style={styles.step2Actions}>
-                    <TouchableOpacity
-                        style={styles.backButton}
-                        onPress={() => setStep('write')}
-                        disabled={!isInteractive}
-                    >
-                        {isInteractive && <Text style={styles.backButtonText}>{t('common.cancel')}</Text>}
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                        style={[styles.button, (!canSend || !isInteractive) && styles.buttonDisabled, { flex: 1.5 }]}
-                        onPress={handleSend}
-                        disabled={!canSend || !isInteractive}
-                    >
-                        {step === 'sending' && <ActivityIndicator color="#FFFFFF" style={{ marginRight: 8 }} />}
-                        <Text style={styles.buttonText}>
-                            {step === 'sending' ? t('compose.sending') : t('compose.send')}
-                        </Text>
-                    </TouchableOpacity>
-                </View>
-            </View>
-        );
     };
 
-    if (step === 'sent') {
-        return (
-            <View style={[styles.sentContainer, { backgroundColor: Theme.colors.background }]}>
-                <Tabs.Screen options={{ headerShown: false, tabBarStyle: { display: 'none' } }} />
-                <Text style={styles.sentText}>{t('compose.sent')}</Text>
-            </View>
-        );
-    }
+    const cardTranslateY = sendAnim.interpolate({
+        inputRange: [0, 1],
+        outputRange: [0, -screenHeight],
+    });
+    const cardOpacity = sendAnim.interpolate({
+        inputRange: [0, 0.7, 1],
+        outputRange: [1, 0.5, 0],
+    });
 
     return (
-        <KeyboardAwareScrollView
-            style={styles.container}
-            contentContainerStyle={styles.content}
-            bottomOffset={20}
-        >
+        <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: Theme.colors.background }}>
             <Tabs.Screen options={{ headerShown: false, tabBarStyle: { display: 'flex' } }} />
-            {step === 'write' && renderStep1()}
-            {(step === 'envelope' || step === 'sending') && renderStep2OrSending()}
-        </KeyboardAwareScrollView>
+
+            <ScrollView
+                style={[styles.container, (step === 'sending' || step === 'sent') && { opacity: 0 }]}
+                contentContainerStyle={styles.content}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+                pointerEvents={step === 'compose' ? 'auto' : 'none'}
+            >
+                <Animated.View style={{
+                    transform: [{ translateY: cardTranslateY }],
+                    opacity: cardOpacity,
+                }}>
+                    <Postcard
+                        key={cardKey}
+                        mode="compose"
+                        body={body}
+                        onBodyChange={setBody}
+                        toName={toName}
+                        onToNameChange={setToName}
+                        toAddress={toAddress}
+                        onToAddressChange={setToAddress}
+                        fromName={fromName}
+                        onFromNameChange={setFromName}
+                        fromAddressUser={currentUser}
+                        onSend={handleSend}
+                        canSend={canSend}
+                    />
+                    {sendError && <Text style={styles.errorText}>{sendError}</Text>}
+                </Animated.View>
+            </ScrollView>
+
+            {step === 'sending' && (
+                <View style={[StyleSheet.absoluteFill, styles.overlayCenter]}>
+                    <ActivityIndicator size="large" color={Theme.colors.accent} style={{ marginBottom: 24 }} />
+                    <Text style={styles.overlayText}>
+                        {t('compose.sending')}
+                    </Text>
+                </View>
+            )}
+
+            {step === 'sent' && (
+                <View style={[StyleSheet.absoluteFill, styles.overlayCenter]}>
+                    <View style={styles.checkCircle}>
+                        <Ionicons name="checkmark" size={36} color="#FFFFFF" />
+                    </View>
+                    <Text style={[styles.overlayText, { color: Theme.colors.text, fontSize: 22 }]}>
+                        {t('compose.sentTitle')}
+                    </Text>
+                </View>
+            )}
+        </SafeAreaView>
     );
 }
 
@@ -193,83 +148,11 @@ const styles = StyleSheet.create({
         backgroundColor: Theme.colors.background,
     },
     content: {
-        padding: Theme.sizes.horizontalPadding,
-        paddingTop: 16,
-        paddingBottom: 40,
+        paddingTop: 40,
+        paddingBottom: 60,
+        paddingHorizontal: 40,
         flexGrow: 1,
-    },
-    stepContainer: {
-        flex: 1,
-        display: 'flex',
-    },
-    bodyInput: {
-        flex: 1,
-        minHeight: 250,
-        fontFamily: Theme.fonts.body,
-        fontSize: 18,
-        lineHeight: 18 + Theme.sizes.lineSpacing,
-        color: Theme.colors.text,
-    },
-    step1Footer: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
         alignItems: 'center',
-        marginTop: 24,
-    },
-    charCount: {
-        fontSize: 13,
-        color: Theme.colors.secondary,
-    },
-    previewText: {
-        fontFamily: Theme.fonts.body,
-        fontSize: 18,
-        lineHeight: 18 + Theme.sizes.lineSpacing,
-        color: Theme.colors.secondary,
-        fontStyle: 'italic',
-        marginBottom: 32,
-    },
-    section: {
-        marginBottom: 24,
-        borderTopWidth: StyleSheet.hairlineWidth,
-        borderTopColor: '#E5E5E5',
-        paddingTop: 16,
-    },
-    sectionLabel: {
-        fontSize: 12,
-        textTransform: 'uppercase',
-        letterSpacing: 0.5,
-        color: Theme.colors.secondary,
-        marginBottom: 12,
-    },
-    fieldInput: {
-        fontFamily: Theme.fonts.body,
-        fontSize: 18,
-        color: Theme.colors.text,
-        borderBottomWidth: StyleSheet.hairlineWidth,
-        borderBottomColor: '#E5E5E5',
-        paddingVertical: 8,
-        marginBottom: 16,
-    },
-    readOnlyField: {
-        fontFamily: Theme.fonts.body,
-        fontSize: 18,
-        color: Theme.colors.secondary,
-        fontStyle: 'italic',
-        paddingVertical: 8,
-        marginBottom: 16,
-    },
-    step2Actions: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginTop: 'auto',
-    },
-    backButton: {
-        flex: 1,
-        padding: 16,
-    },
-    backButtonText: {
-        fontSize: 16,
-        color: Theme.colors.secondary,
     },
     errorText: {
         fontSize: 13,
@@ -277,31 +160,26 @@ const styles = StyleSheet.create({
         marginBottom: 16,
         textAlign: 'center',
     },
-    button: {
-        flexDirection: 'row',
-        backgroundColor: Theme.colors.accent,
-        borderRadius: 12,
-        padding: 16,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    buttonDisabled: {
-        backgroundColor: Theme.colors.secondary,
-    },
-    buttonText: {
-        color: '#FFFFFF',
-        fontSize: 16,
-        fontWeight: '600',
-    },
-    sentContainer: {
-        flex: 1,
+    overlayCenter: {
         justifyContent: 'center',
         alignItems: 'center',
+        paddingHorizontal: 40,
+        backgroundColor: Theme.colors.background,
+        zIndex: 10,
     },
-    sentText: {
-        fontFamily: Theme.fonts.body,
-        fontSize: 22,
-        color: Theme.colors.accent,
+    overlayText: {
+        fontFamily: 'Georgia',
+        fontSize: 18,
+        color: Theme.colors.secondary,
         textAlign: 'center',
+    },
+    checkCircle: {
+        width: 64,
+        height: 64,
+        borderRadius: 32,
+        backgroundColor: Theme.colors.accent,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 24,
     },
 });

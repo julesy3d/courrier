@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { registerForPushNotifications } from './notifications';
 import { supabase } from './supabase';
 
 export type AppUser = {
@@ -7,6 +8,7 @@ export type AppUser = {
     address: string;
     address_lang: 'en' | 'fr';
     created_at: string;
+    push_token: string | null;
 };
 
 export type Letter = {
@@ -102,6 +104,8 @@ export const useStore = create<AuthState>((set, get) => ({
                 set({ currentUser: null, isLoading: false });
             } else {
                 set({ currentUser: data as AppUser, isLoading: false });
+                // Register push token (fire and forget)
+                registerForPushNotifications(data.id).catch(console.error);
             }
         } catch (e) {
             console.error('Exception loading current user', e);
@@ -128,6 +132,8 @@ export const useStore = create<AuthState>((set, get) => ({
 
             if (error) throw error;
             set({ currentUser: data as AppUser });
+            // Register push token (fire and forget)
+            registerForPushNotifications(data.id).catch(console.error);
         } catch (e) {
             console.error('Error creating user', e);
             throw e;
