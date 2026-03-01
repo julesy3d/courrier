@@ -1,44 +1,39 @@
-import { Ionicons } from '@expo/vector-icons';
-import { Tabs } from 'expo-router';
+import { NativeTabs } from 'expo-router/unstable-native-tabs';
+import { Platform } from 'react-native';
 import { useTranslation } from '../../lib/i18n';
-import { Theme } from '../../theme';
 
 export default function TabsLayout() {
     const { t } = useTranslation();
 
     return (
-        <Tabs
-            initialRouteName="compose"
-            screenOptions={{
-                headerShown: true,
-                tabBarActiveTintColor: Theme.colors.accent,
-                tabBarInactiveTintColor: Theme.colors.secondary,
-                headerStyle: { backgroundColor: Theme.colors.background },
-                headerTitleStyle: { color: Theme.colors.text, fontFamily: Theme.fonts.body },
-                tabBarStyle: { backgroundColor: Theme.colors.background, borderTopColor: '#E5E5E5' },
-            }}>
-            <Tabs.Screen
-                name="letters"
-                options={{
-                    title: t('letters.tab'),
-                    tabBarIcon: ({ color, size }) => <Ionicons name="mail" size={size} color={color} />,
-                }}
-            />
-            <Tabs.Screen
-                name="compose"
-                options={{
-                    title: t('compose.tab'),
-                    tabBarIcon: ({ color, size }) => <Ionicons name="pencil" size={size} color={color} />,
-                }}
-            />
-            <Tabs.Screen
-                name="carnet"
-                options={{
-                    title: t('carnet.tab'),
-                    tabBarIcon: ({ color, size }) => <Ionicons name="book" size={size} color={color} />,
-                }}
-            />
-            {/* Extraneous index screen removed */}
-        </Tabs>
+        <NativeTabs
+            {...(Platform.OS === 'android' ? {
+                backgroundColor: 'rgba(250, 249, 246, 0.85)',
+            } : {})}
+        >
+            <NativeTabs.Trigger name="letters">
+                <NativeTabs.Trigger.Label>{t('letters.tab')}</NativeTabs.Trigger.Label>
+                <NativeTabs.Trigger.Icon
+                    sf={{ default: 'envelope', selected: 'envelope.fill' }}
+                    md="mail"
+                />
+            </NativeTabs.Trigger>
+
+            <NativeTabs.Trigger name="compose">
+                <NativeTabs.Trigger.Label>{t('compose.tab')}</NativeTabs.Trigger.Label>
+                <NativeTabs.Trigger.Icon
+                    sf={{ default: 'square.and.pencil', selected: 'square.and.pencil' }}
+                    md="edit"
+                />
+            </NativeTabs.Trigger>
+
+            <NativeTabs.Trigger name="carnet">
+                <NativeTabs.Trigger.Label>{t('carnet.tab')}</NativeTabs.Trigger.Label>
+                <NativeTabs.Trigger.Icon
+                    sf={{ default: 'book', selected: 'book.fill' }}
+                    md="menu_book"
+                />
+            </NativeTabs.Trigger>
+        </NativeTabs>
     );
 }

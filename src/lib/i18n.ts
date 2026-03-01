@@ -41,6 +41,13 @@ const en = {
     'compose.placeholderToAddress': '3, Flower Road',
     'compose.placeholderFromName': 'Your name',
     'compose.tab': 'Write',
+    'compose.coldOpen': 'Write a letter to someone you love.',
+    'compose.tapToWrite': 'Tap to write',
+    'compose.pickImage': 'Add a photo',
+    'compose.tapToAddPhoto': 'Tap to add a photo',
+    'compose.imagePickerTitle': 'Add a photo',
+    'compose.camera': 'Take a photo',
+    'compose.library': 'Choose from library',
 
     // Letters Tab
     'letters.tab': 'Letters',
@@ -54,6 +61,8 @@ const en = {
 
     // Carnet Tab
     'carnet.tab': 'Address Book',
+    'carnet.title': 'Your address book',
+    'carnet.tapToOpen': 'Tap to open',
     'carnet.empty': "Your address book is empty.\nAdd someone's address here so you can write to them.",
     'carnet.newContact': 'New contact',
     'carnet.name': 'Name',
@@ -117,6 +126,13 @@ const fr = {
     'compose.placeholderToAddress': '3, Rue de la Fleur',
     'compose.placeholderFromName': 'Ton nom',
     'compose.tab': 'Écrire',
+    'compose.coldOpen': 'Écris à quelqu\'un que tu aimes.',
+    'compose.tapToWrite': 'Touche pour écrire',
+    'compose.pickImage': 'Ajouter une photo',
+    'compose.tapToAddPhoto': 'Touche pour ajouter une photo',
+    'compose.imagePickerTitle': 'Ajouter une photo',
+    'compose.camera': 'Prendre une photo',
+    'compose.library': 'Choisir dans la galerie',
 
     // Letters Tab
     'letters.tab': 'Lettres',
@@ -130,6 +146,8 @@ const fr = {
 
     // Carnet Tab
     'carnet.tab': 'Carnet',
+    'carnet.title': 'Ton carnet d\'adresses',
+    'carnet.tapToOpen': 'Touche pour ouvrir',
     'carnet.empty': "Ton carnet est vide.\nAjoute l'adresse de quelqu'un pour pouvoir lui écrire.",
     'carnet.newContact': 'Nouveau contact',
     'carnet.name': 'Nom',

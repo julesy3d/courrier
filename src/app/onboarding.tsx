@@ -1,3 +1,4 @@
+import * as Haptics from 'expo-haptics';
 import React, { useState } from 'react';
 import { ActivityIndicator, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
@@ -21,6 +22,7 @@ export default function OnboardingScreen() {
     const { t } = useTranslation();
 
     const toggleLanguage = () => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         const newLang = language === 'en' ? 'fr' : 'en';
         setLanguage(newLang);
         setLocaleOverride(newLang);
@@ -65,6 +67,7 @@ export default function OnboardingScreen() {
             }
 
             await createUser(assembledAddress, language);
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
             setLocaleOverride(null);
             // Navigation is handled automatically by the _layout reacting to currentUser change
         } catch (e) {

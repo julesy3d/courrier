@@ -41,7 +41,14 @@
         }
       ],
       "expo-secure-store",
-      "expo-localization"
+      "expo-localization",
+      "expo-video",
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Courrier utilise l'appareil photo pour vos cartes postales."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

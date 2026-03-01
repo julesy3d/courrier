@@ -1,12 +1,22 @@
-import { Ionicons } from '@expo/vector-icons';
-import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Modal, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import * as Haptics from 'expo-haptics';
+import { useVideoPlayer, VideoView } from 'expo-video';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+    ActivityIndicator, Alert, Animated, Dimensions, FlatList,
+    ImageBackground, Keyboard, PanResponder, ScrollView, StyleSheet, Text,
+    TextInput, TouchableOpacity, View
+} from 'react-native';
 import { Swipeable } from 'react-native-gesture-handler';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+
 import AddressBuilder, { ENGLISH_TYPES, FRENCH_TYPES } from '../../components/AddressBuilder';
 import { useTranslation } from '../../lib/i18n';
 import { AddressBookEntry, useStore } from '../../lib/store';
 import { Theme } from '../../theme';
+
+const { height: screenHeight } = Dimensions.get('window');
 
 export default function AddressesScreen() {
     const {
@@ -20,17 +30,87 @@ export default function AddressesScreen() {
     } = useStore();
     const { t } = useTranslation();
 
+    const insets = useSafeAreaInsets();
+    const tabBarHeight = 49 + insets.bottom; // Native tab bar height (49pt) + safe area
+    const SHEET_TOP_GAP = insets.top + 100;
+    const SHEET_HEIGHT = screenHeight - SHEET_TOP_GAP;
+
     const [entries, setEntries] = useState<AddressBookEntry[]>([]);
     const [isLoading, setIsLoading] = useState(true);
 
-    // Add Contact Modal State
-    const [addModalVisible, setAddModalVisible] = useState(false);
+    const sheetAnim = useRef(new Animated.Value(0)).current;
+
+    const sheetTranslateY = sheetAnim.interpolate({
+        inputRange: [0, 1],
+        outputRange: [SHEET_HEIGHT, 0],
+    });
+
+    const [sheetTab, setSheetTab] = useState<'contacts' | 'settings'>('contacts');
+
+    const openSheet = () => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        Animated.spring(sheetAnim, {
+            toValue: 1,
+            damping: 20,
+            stiffness: 150,
+            useNativeDriver: true,
+        }).start();
+    };
+
+    const closeSheet = () => {
+        Keyboard.dismiss();
+        Animated.spring(sheetAnim, {
+            toValue: 0,
+            damping: 20,
+            stiffness: 150,
+            useNativeDriver: true,
+        }).start(() => {
+            setShowAddForm(false);
+            setShowAddressBuilder(false);
+        });
+    };
+
+    const panResponder = useRef(
+        PanResponder.create({
+            onStartShouldSetPanResponder: () => true,
+            onMoveShouldSetPanResponder: (_, gestureState) => gestureState.dy > 10,
+            onPanResponderMove: (_, gestureState) => {
+                if (gestureState.dy > 0) {
+                    const progress = 1 - (gestureState.dy / SHEET_HEIGHT);
+                    sheetAnim.setValue(Math.max(0, progress));
+                }
+            },
+            onPanResponderRelease: (_, gestureState) => {
+                if (gestureState.dy > 100 || gestureState.vy > 0.5) {
+                    closeSheet();
+                } else {
+                    Animated.spring(sheetAnim, {
+                        toValue: 1,
+                        damping: 20,
+                        stiffness: 150,
+                        useNativeDriver: true,
+                    }).start();
+                }
+            },
+        })
+    ).current;
+
+    const player = useVideoPlayer(
+        require('../../assets/video/BOOK_background.mp4'),
+        (player: any) => {
+            player.loop = true;
+            player.muted = true;
+            player.playbackRate = 0.25;
+            player.play();
+        }
+    );
+
+    // States for inline forms
+    const [showAddForm, setShowAddForm] = useState(false);
     const [newName, setNewName] = useState('');
     const [newAddress, setNewAddress] = useState('');
     const [isSavingContact, setIsSavingContact] = useState(false);
 
-    // Settings Modal State
-    const [settingsModalVisible, setSettingsModalVisible] = useState(false);
     const [showAddressBuilder, setShowAddressBuilder] = useState(false);
 
     // Shared Address Builder State
@@ -52,9 +132,21 @@ export default function AddressesScreen() {
         }
     }, [fetchAddressBook]);
 
+    useFocusEffect(
+        useCallback(() => {
+            loadEntries();
+            return () => {
+                sheetAnim.setValue(0);
+                setShowAddForm(false);
+                setShowAddressBuilder(false);
+                setSheetTab('contacts');
+            };
+        }, [loadEntries, sheetAnim])
+    );
+
     useEffect(() => {
-        loadEntries().finally(() => setIsLoading(false));
-    }, [loadEntries]);
+        setIsLoading(false);
+    }, [entries]);
 
     // Handle Add Contact
     const saveNewContact = async () => {
@@ -62,8 +154,9 @@ export default function AddressesScreen() {
         setIsSavingContact(true);
         try {
             await addAddressBookEntry(newName.trim(), newAddress.trim());
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
             await loadEntries();
-            setAddModalVisible(false);
+            setShowAddForm(false);
             setNewName('');
             setNewAddress('');
         } catch (e) {
@@ -83,6 +176,7 @@ export default function AddressesScreen() {
                 onPress: async () => {
                     try {
                         await deleteAddressBookEntry(entry.id);
+                        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
                         await loadEntries();
                     } catch (e) {
                         console.error(e);
@@ -140,7 +234,6 @@ export default function AddressesScreen() {
 
             await updateAddress(assembled, editLang);
             setShowAddressBuilder(false);
-            setSettingsModalVisible(false);
         } catch (e) {
             setEditSaveError(t('address.error.generic'));
         } finally {
@@ -166,8 +259,11 @@ export default function AddressesScreen() {
         );
 
         return (
-            <Swipeable renderRightActions={renderRightActions}>
-                <View style={[styles.row, { backgroundColor: Theme.colors.background }]}>
+            <Swipeable
+                renderRightActions={renderRightActions}
+                onSwipeableOpen={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)}
+            >
+                <View style={[styles.row, { backgroundColor: 'transparent' }]}>
                     <Text style={styles.entryName}>{item.name}</Text>
                     <Text style={styles.entryAddress}>{item.address}</Text>
                 </View>
@@ -177,129 +273,129 @@ export default function AddressesScreen() {
 
     return (
         <View style={styles.container}>
-            {/* Custom Header matching navigation styling since we need buttons */}
-            <View style={styles.header}>
-                <TouchableOpacity onPress={() => setSettingsModalVisible(true)} style={styles.headerButton}>
-                    <Ionicons name="settings-outline" size={24} color={Theme.colors.text} />
+            <VideoView
+                player={player}
+                style={StyleSheet.absoluteFillObject}
+                nativeControls={false}
+                contentFit="cover"
+                allowsVideoFrameAnalysis={false}
+            />
+
+            <SafeAreaView edges={['top']} style={{ flex: 1 }}>
+
+                <TouchableOpacity
+                    style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}
+                    activeOpacity={0.8}
+                    onPress={openSheet}
+                >
+                    <Text style={{
+                        fontFamily: 'Georgia',
+                        fontSize: 22,
+                        color: '#FAF9F6',
+                        textAlign: 'center',
+                        textShadowColor: 'rgba(0,0,0,0.5)',
+                        textShadowOffset: { width: 0, height: 1 },
+                        textShadowRadius: 4,
+                    }}>
+                        {t('carnet.title')}
+                    </Text>
+                    <Text style={{
+                        fontFamily: 'Georgia',
+                        fontSize: 16,
+                        color: '#FAF9F6',
+                        marginTop: 40,
+                        textShadowColor: 'rgba(0,0,0,0.5)',
+                        textShadowOffset: { width: 0, height: 1 },
+                        textShadowRadius: 4,
+                        opacity: 0.7,
+                    }}>
+                        {t('carnet.tapToOpen')}
+                    </Text>
                 </TouchableOpacity>
-                <Text style={styles.headerTitle}>{t('carnet.tab')}</Text>
-                <TouchableOpacity onPress={() => setAddModalVisible(true)} style={styles.headerButton}>
-                    <Ionicons name="add" size={28} color={Theme.colors.text} />
-                </TouchableOpacity>
-            </View>
+            </SafeAreaView>
 
-            {/* Main List */}
-            <View style={{ flex: 1 }}>
-                {isLoading ? (
-                    <View style={styles.centered}>
-                        <ActivityIndicator color={Theme.colors.accent} />
+            <Animated.View style={{
+                position: 'absolute',
+                bottom: 0,
+                left: 0,
+                right: 0,
+                height: SHEET_HEIGHT,
+                transform: [{ translateY: sheetTranslateY }],
+                borderTopLeftRadius: 20,
+                borderTopRightRadius: 20,
+                overflow: 'hidden',
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: -4 },
+                shadowOpacity: 0.15,
+                shadowRadius: 12,
+                elevation: 8,
+            }}>
+                <ImageBackground
+                    source={require('../../assets/images/lettreMAIN_rectoretouche1_0.png')}
+                    style={{ flex: 1 }}
+                    resizeMode="cover"
+                >
+                    <View
+                        {...panResponder.panHandlers}
+                        style={{
+                            alignItems: 'center',
+                            paddingVertical: 12,
+                        }}
+                    >
+                        <View style={{
+                            width: 40,
+                            height: 4,
+                            borderRadius: 2,
+                            backgroundColor: Theme.colors.secondary,
+                            opacity: 0.5,
+                        }} />
                     </View>
-                ) : entries.length === 0 ? (
-                    <View style={styles.centered}>
-                        <Text style={[styles.emptyText, { textAlign: 'center', paddingHorizontal: 40 }]}>
-                            {t('carnet.empty')}
-                        </Text>
-                    </View>
-                ) : (
-                    <FlatList
-                        data={entries}
-                        keyExtractor={item => item.id}
-                        renderItem={renderItem}
-                        contentContainerStyle={{ paddingVertical: 8 }}
-                    />
-                )}
-            </View>
 
-            {/* Add Contact Modal */}
-            <Modal visible={addModalVisible} animationType="slide" presentationStyle="pageSheet">
-                <View style={styles.modalContainer}>
-                    <View style={styles.modalHeader}>
-                        <TouchableOpacity onPress={() => setAddModalVisible(false)} disabled={isSavingContact}>
-                            <Text style={styles.modalCancelButton}>{t('common.cancel')}</Text>
-                        </TouchableOpacity>
-                        <Text style={styles.modalTitle}>{t('carnet.newContact')}</Text>
-                        <View style={{ width: 60 }} />
-                    </View>
-
-                    <View style={styles.modalContent}>
-                        <TextInput
-                            style={styles.modalInput}
-                            placeholder={t('carnet.name')}
-                            placeholderTextColor={Theme.colors.secondary}
-                            value={newName}
-                            onChangeText={setNewName}
-                        />
-                        <TextInput
-                            style={styles.modalInput}
-                            placeholder={t('carnet.address')}
-                            placeholderTextColor={Theme.colors.secondary}
-                            value={newAddress}
-                            onChangeText={setNewAddress}
-                            autoCorrect={false}
-                            autoCapitalize="none"
-                            autoComplete="off"
-                        />
-
+                    <View style={{
+                        flexDirection: 'row',
+                        justifyContent: 'center',
+                        paddingBottom: 12,
+                        borderBottomWidth: StyleSheet.hairlineWidth,
+                        borderBottomColor: 'rgba(0,0,0,0.1)',
+                        marginHorizontal: 24,
+                        marginBottom: 16,
+                    }}>
                         <TouchableOpacity
-                            style={[
-                                styles.button,
-                                (!newName.trim() || !newAddress.trim() || isSavingContact) && styles.buttonDisabled,
-                                { marginTop: 20 }
-                            ]}
-                            onPress={saveNewContact}
-                            disabled={!newName.trim() || !newAddress.trim() || isSavingContact}
+                            onPress={() => setSheetTab('contacts')}
+                            style={{ marginRight: 32 }}
                         >
-                            {isSavingContact && <ActivityIndicator color="#FFFFFF" style={{ marginRight: 8 }} />}
-                            <Text style={styles.buttonText}>{t('carnet.save')}</Text>
+                            <Text style={{
+                                fontSize: 15,
+                                fontFamily: 'Georgia',
+                                color: sheetTab === 'contacts'
+                                    ? Theme.colors.text
+                                    : Theme.colors.secondary,
+                            }}>
+                                {t('carnet.tab')}
+                            </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={() => setSheetTab('settings')}>
+                            <Text style={{
+                                fontSize: 15,
+                                fontFamily: 'Georgia',
+                                color: sheetTab === 'settings'
+                                    ? Theme.colors.text
+                                    : Theme.colors.secondary,
+                            }}>
+                                {t('settings.title')}
+                            </Text>
                         </TouchableOpacity>
                     </View>
-                </View>
-            </Modal>
 
-            {/* Settings Modal */}
-            <Modal visible={settingsModalVisible} animationType="slide" presentationStyle="pageSheet">
-                <View style={styles.modalContainer}>
-                    <View style={styles.modalHeader}>
-                        <View style={{ width: 60 }} />
-                        <Text style={styles.modalTitle}>{t('settings.title')}</Text>
-                        <TouchableOpacity onPress={() => {
-                            setSettingsModalVisible(false);
-                            setShowAddressBuilder(false);
-                        }}>
-                            <Text style={styles.modalDoneButton}>{t('common.done')}</Text>
-                        </TouchableOpacity>
-                    </View>
-
-                    {!showAddressBuilder ? (
-                        <View style={[styles.modalContent, { alignItems: 'center', paddingTop: 60 }]}>
-                            <View style={styles.langToggleContainer}>
-                                <TouchableOpacity
-                                    style={styles.langOption}
-                                    onPress={() => updateLanguage('en')}
-                                >
-                                    <Text style={[styles.langText, currentUser?.address_lang === 'en' && styles.langTextActive]}>English</Text>
-                                    <View style={[styles.langUnderline, currentUser?.address_lang === 'en' && styles.langUnderlineActive]} />
+                    {showAddressBuilder ? (
+                        <KeyboardAwareScrollView style={styles.modalContent} contentContainerStyle={{ paddingBottom: tabBarHeight + 40, paddingHorizontal: 24 }} bottomOffset={40}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+                                <TouchableOpacity onPress={() => setShowAddressBuilder(false)}>
+                                    <Text style={{ fontSize: 16, color: Theme.colors.secondary }}>{t('common.cancel')}</Text>
                                 </TouchableOpacity>
-                                <View style={{ width: 40 }} />
-                                <TouchableOpacity
-                                    style={styles.langOption}
-                                    onPress={() => updateLanguage('fr')}
-                                >
-                                    <Text style={[styles.langText, currentUser?.address_lang === 'fr' && styles.langTextActive]}>Français</Text>
-                                    <View style={[styles.langUnderline, currentUser?.address_lang === 'fr' && styles.langUnderlineActive]} />
-                                </TouchableOpacity>
+                                <Text style={styles.modalTitle}>{t('address.preview')}</Text>
+                                <View style={{ width: 60 }} />
                             </View>
-
-                            <Text style={styles.settingsLabel}>{t('settings.yourAddress')}</Text>
-                            <Text style={styles.settingsAddress}>{currentUser?.address || '—'}</Text>
-
-                            <TouchableOpacity onPress={initAddressChange} style={{ marginTop: 40 }}>
-                                <Text style={styles.changeAddressButton}>{t('settings.changeAddress')}</Text>
-                            </TouchableOpacity>
-                        </View>
-                    ) : (
-                        <KeyboardAwareScrollView style={styles.modalContent} contentContainerStyle={{ paddingBottom: 40 }} bottomOffset={40}>
-                            <Text style={[styles.modalTitle, { marginVertical: 24 }]}>{t('address.preview')}</Text>
 
                             <AddressBuilder
                                 language={editLang}
@@ -327,16 +423,129 @@ export default function AddressesScreen() {
                                 onPress={saveNewAddress}
                                 disabled={isSavingAddress}
                             >
-                                {isSavingAddress ? (
-                                    <ActivityIndicator color="#FFFFFF" style={{ marginRight: 8 }} />
-                                ) : null}
+                                {isSavingAddress && <ActivityIndicator color="#FFFFFF" style={{ marginRight: 8 }} />}
                                 <Text style={styles.buttonText}>{t('settings.saveNewAddress')}</Text>
                             </TouchableOpacity>
                         </KeyboardAwareScrollView>
-                    )}
-                </View>
-            </Modal>
+                    ) : sheetTab === 'contacts' ? (
+                        <FlatList
+                            data={entries}
+                            keyExtractor={item => item.id}
+                            renderItem={renderItem}
+                            contentContainerStyle={{
+                                paddingHorizontal: 24,
+                                paddingBottom: tabBarHeight + 20,
+                            }}
+                            ListHeaderComponent={
+                                showAddForm ? (
+                                    <View style={{ marginBottom: 24 }}>
+                                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                                            <TouchableOpacity onPress={() => setShowAddForm(false)}>
+                                                <Text style={{ fontSize: 16, color: Theme.colors.secondary }}>{t('common.cancel')}</Text>
+                                            </TouchableOpacity>
+                                            <Text style={styles.modalTitle}>{t('carnet.newContact')}</Text>
+                                            <View style={{ width: 60 }} />
+                                        </View>
+                                        <TextInput
+                                            style={styles.modalInput}
+                                            placeholder={t('carnet.name')}
+                                            placeholderTextColor={Theme.colors.secondary}
+                                            value={newName}
+                                            onChangeText={setNewName}
+                                        />
+                                        <TextInput
+                                            style={styles.modalInput}
+                                            placeholder={t('carnet.address')}
+                                            placeholderTextColor={Theme.colors.secondary}
+                                            value={newAddress}
+                                            onChangeText={setNewAddress}
+                                            autoCorrect={false}
+                                            autoCapitalize="none"
+                                            autoComplete="off"
+                                        />
+                                        <TouchableOpacity
+                                            style={[
+                                                styles.button,
+                                                (!newName.trim() || !newAddress.trim() || isSavingContact) && styles.buttonDisabled,
+                                                { marginTop: 8 }
+                                            ]}
+                                            onPress={saveNewContact}
+                                            disabled={!newName.trim() || !newAddress.trim() || isSavingContact}
+                                        >
+                                            {isSavingContact && <ActivityIndicator color="#FFFFFF" style={{ marginRight: 8 }} />}
+                                            <Text style={styles.buttonText}>{t('carnet.save')}</Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                ) : (
+                                    <View style={{ marginBottom: 16 }}>
+                                        <Text style={{
+                                            fontFamily: 'Georgia',
+                                            fontSize: 18,
+                                            color: Theme.colors.text,
+                                            marginBottom: 16,
+                                        }}>
+                                            {t('carnet.title')}
+                                        </Text>
+                                        <TouchableOpacity
+                                            onPress={() => setShowAddForm(true)}
+                                            style={{ paddingVertical: 10 }}
+                                        >
+                                            <Text style={{
+                                                fontSize: 15,
+                                                color: Theme.colors.accent,
+                                            }}>
+                                                + {t('carnet.newContact')}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                )
+                            }
+                            ListEmptyComponent={
+                                !isLoading && entries.length === 0 && !showAddForm ? (
+                                    <Text style={{
+                                        fontSize: 14,
+                                        color: Theme.colors.secondary,
+                                        textAlign: 'center',
+                                        paddingTop: 40,
+                                        paddingHorizontal: 20,
+                                    }}>
+                                        {t('carnet.empty')}
+                                    </Text>
+                                ) : isLoading ? (
+                                    <ActivityIndicator style={{ marginTop: 40 }} color={Theme.colors.accent} />
+                                ) : null
+                            }
+                        />
+                    ) : (
+                        <ScrollView contentContainerStyle={{ padding: 24, paddingBottom: tabBarHeight + 20, alignItems: 'center' }}>
+                            <View style={styles.langToggleContainer}>
+                                <TouchableOpacity
+                                    style={styles.langOption}
+                                    onPress={() => updateLanguage('en')}
+                                >
+                                    <Text style={[styles.langText, currentUser?.address_lang === 'en' && styles.langTextActive]}>English</Text>
+                                    <View style={[styles.langUnderline, currentUser?.address_lang === 'en' && styles.langUnderlineActive]} />
+                                </TouchableOpacity>
+                                <View style={{ width: 40 }} />
+                                <TouchableOpacity
+                                    style={styles.langOption}
+                                    onPress={() => updateLanguage('fr')}
+                                >
+                                    <Text style={[styles.langText, currentUser?.address_lang === 'fr' && styles.langTextActive]}>Français</Text>
+                                    <View style={[styles.langUnderline, currentUser?.address_lang === 'fr' && styles.langUnderlineActive]} />
+                                </TouchableOpacity>
+                            </View>
 
+                            <Text style={styles.settingsLabel}>{t('settings.yourAddress')}</Text>
+                            <Text style={styles.settingsAddress}>{currentUser?.address || '—'}</Text>
+
+                            <TouchableOpacity onPress={initAddressChange} style={{ marginTop: 32 }}>
+                                <Text style={styles.changeAddressButton}>{t('settings.changeAddress')}</Text>
+                            </TouchableOpacity>
+                        </ScrollView>
+                    )}
+                </ImageBackground>
+            </Animated.View>
         </View>
     );
 }
@@ -344,89 +553,42 @@ export default function AddressesScreen() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: Theme.colors.background,
-    },
-    header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingHorizontal: Theme.sizes.horizontalPadding,
-        paddingVertical: 12,
-        borderBottomWidth: StyleSheet.hairlineWidth,
-        borderBottomColor: '#E5E5E5',
-        backgroundColor: Theme.colors.background,
-    },
-    headerTitle: {
-        fontFamily: Theme.fonts.body,
-        fontSize: 18,
-        color: Theme.colors.text,
-    },
-    headerButton: {
-        padding: 4,
-    },
-    centered: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    emptyText: {
-        fontSize: 13,
-        color: Theme.colors.secondary,
+        backgroundColor: '#000',
     },
     row: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
         paddingVertical: 12,
-        paddingHorizontal: Theme.sizes.horizontalPadding,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: 'rgba(0,0,0,0.1)',
     },
     entryName: {
         fontSize: 16,
         color: Theme.colors.text,
+        fontWeight: '500',
     },
     entryAddress: {
         fontSize: 15,
         color: Theme.colors.secondary,
-    },
-    modalContainer: {
+        marginRight: 10,
         flex: 1,
-        backgroundColor: Theme.colors.background,
-    },
-    modalHeader: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingHorizontal: Theme.sizes.horizontalPadding,
-        paddingVertical: 16,
-        borderBottomWidth: StyleSheet.hairlineWidth,
-        borderBottomColor: '#E5E5E5',
-    },
-    modalCancelButton: {
-        fontSize: 16,
-        color: Theme.colors.secondary,
-        width: 60,
-    },
-    modalDoneButton: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: Theme.colors.accent,
-        width: 60,
         textAlign: 'right',
     },
     modalTitle: {
         fontFamily: Theme.fonts.body,
         fontSize: 18,
         color: Theme.colors.text,
+        textAlign: 'center',
     },
     modalContent: {
         flex: 1,
-        paddingHorizontal: Theme.sizes.horizontalPadding,
-        paddingTop: 24,
+        paddingTop: 10,
     },
     modalInput: {
         borderWidth: 1,
-        borderColor: '#E5E5E5',
-        backgroundColor: '#FFFFFF',
+        borderColor: 'rgba(0,0,0,0.1)',
+        backgroundColor: 'rgba(255,255,255,0.7)',
         borderRadius: 8,
         paddingHorizontal: 16,
         paddingVertical: 12,
@@ -454,6 +616,7 @@ const styles = StyleSheet.create({
         fontSize: 13,
         color: Theme.colors.secondary,
         marginBottom: 8,
+        textAlign: 'center',
     },
     settingsAddress: {
         fontFamily: Theme.fonts.body,
@@ -472,7 +635,8 @@ const styles = StyleSheet.create({
     },
     langToggleContainer: {
         flexDirection: 'row',
-        marginBottom: 60,
+        justifyContent: 'center',
+        marginBottom: 40,
     },
     langOption: {
         alignItems: 'center',

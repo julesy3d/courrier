@@ -18,6 +18,7 @@ export type Letter = {
     recipient_id: string | null;
     body: string;
     signature: string | null;
+    image_url: string | null;
     sent_at: string;
     opened_at: string | null;
     delivers_at: string | null;
@@ -51,7 +52,7 @@ interface AuthState {
     fetchReceivedLetters: () => Promise<Letter[]>;
     fetchSentLetters: () => Promise<Letter[]>;
     fetchReturnedLetters: () => Promise<Letter[]>;
-    sendLetter: (body: string, recipientAddress: string) => Promise<void>;
+    sendLetter: (body: string, recipientAddress: string, imageUrl: string | null) => Promise<void>;
     markLetterOpened: (letterId: string) => Promise<void>;
     loadUserById: (userId: string) => Promise<AppUser | null>;
     fetchAddressBook: () => Promise<AddressBookEntry[]>;
@@ -256,16 +257,20 @@ export const useStore = create<AuthState>((set, get) => ({
         return data as Letter[];
     },
 
-    sendLetter: async (body: string, recipientAddress: string) => {
+    sendLetter: async (body: string, recipientAddress: string, imageUrl: string | null) => {
         const { currentUser } = get();
         if (!currentUser) throw new Error("No user");
 
-        const newLetter = {
+        const newLetter: any = {
             sender_id: currentUser.id,
             recipient_address: recipientAddress,
             body,
             signature: null,
         };
+
+        if (imageUrl) {
+            newLetter.image_url = imageUrl;
+        }
 
         const { error } = await supabase
             .from('letters')
