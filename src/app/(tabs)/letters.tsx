@@ -242,6 +242,8 @@ export default function LettersScreen() {
                                     ? selectedLetter.recipient_address
                                     : undefined
                             }
+                            isDelivered={true}
+                            letterId={selectedLetter.sent_at}
                         />
                         <Text style={{
                             fontFamily: 'Georgia',

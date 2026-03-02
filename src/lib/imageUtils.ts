@@ -1,4 +1,6 @@
+import { decode } from 'base64-arraybuffer';
 import * as Device from 'expo-device';
+import * as FileSystem from 'expo-file-system';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import { Alert, Platform } from 'react-native';
@@ -111,13 +113,17 @@ export async function uploadPostcardImage(
 ): Promise<string> {
     const fileName = `${userId}/${Date.now()}.webp`;
 
-    // Read the file as a blob for upload
-    const response = await fetch(localUri);
-    const blob = await response.blob();
+    // Read local file as base64
+    const base64 = await FileSystem.readAsStringAsync(localUri, {
+        encoding: 'base64',
+    });
+
+    // Decode base64 to ArrayBuffer for upload
+    const arrayBuffer = decode(base64);
 
     const { error: uploadError } = await supabase.storage
         .from('postcard-images')
-        .upload(fileName, blob, {
+        .upload(fileName, arrayBuffer, {
             contentType: 'image/webp',
             upsert: false,
         });

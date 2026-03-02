@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Dimensions, Easing, Image, ImageBackground, Keyboard, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useTranslation } from '../lib/i18n';
 import { playFlip } from '../lib/sounds';
@@ -13,11 +13,35 @@ const CARD_WIDTH = windowWidth - (HORIZONTAL_PADDING * 2);
 const CARD_ASPECT_RATIO = 297 / 422;
 const CARD_HEIGHT = CARD_WIDTH / CARD_ASPECT_RATIO;
 
+/**
+ * Simple seeded pseudo-random number generator.
+ * Given a string seed (letter ID), produces deterministic values 0-1.
+ * Call multiple times for multiple random values — each call advances the sequence.
+ */
+function seededRandom(seed: string): () => number {
+    let hash = 0;
+    for (let i = 0; i < seed.length; i++) {
+        const char = seed.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash |= 0; // Convert to 32-bit int
+    }
+    return () => {
+        hash = (hash * 16807 + 0) % 2147483647;
+        if (hash < 0) hash += 2147483647;
+        return (hash - 1) / 2147483646;
+    };
+}
+
 // Stamp positioning — centered at 40px from right, 40px from top on 297×422 texture
 const STAMP_CENTER_X_RATIO = (297 - 40) / 297;  // 0.865 from left
-const STAMP_CENTER_Y_RATIO = 40 / 422;           // 0.0948 from top
-const STAMP_WIDTH = CARD_WIDTH * 0.17;
+const STAMP_CENTER_Y_RATIO = 44 / 422;           // 0.1043 from top (nudged 4px down)
+const STAMP_WIDTH = CARD_WIDTH * 0.264;
 const STAMP_HEIGHT = STAMP_WIDTH * 1.25;          // Slightly taller than wide, like a real stamp
+
+// Postmark (tampon) sizing — asset is 280×120px, ~1/3 of stamp height
+const TAMPON_ASPECT = 280 / 120; // 2.33:1
+const TAMPON_HEIGHT = STAMP_HEIGHT * 0.74;
+const TAMPON_WIDTH = TAMPON_HEIGHT * TAMPON_ASPECT;
 
 type PostcardMode = 'compose' | 'view';
 
@@ -56,6 +80,9 @@ export interface PostcardProps {
     stampRotation?: number;          // Random rotation in degrees (-2 to +2)
     stampOffsetX?: number;           // Random X offset in points (-2 to +2)
     stampOffsetY?: number;           // Random Y offset in points (-2 to +2)
+
+    isDelivered?: boolean;    // True for received letters — shows stamp + postmark
+    letterId?: string;        // Letter UUID — seeds the stamp/postmark randomization
 }
 
 export default function Postcard({
@@ -70,12 +97,34 @@ export default function Postcard({
     dateStr,
     onSend, canSend = false, isSending = false,
     stampAnim, stampRotation = 0, stampOffsetX = 0, stampOffsetY = 0,
+    isDelivered = false,
+    letterId,
 }: PostcardProps) {
     const { t } = useTranslation();
     const { currentUser } = useStore();
     const [side, setSide] = useState<'recto' | 'verso'>('recto');
     const [isFlipped, setIsFlipped] = useState(false);
     const flipAnim = useRef(new Animated.Value(0)).current;
+
+    // Deterministic random placement for delivered letters
+    const deliveredOffsets = useMemo(() => {
+        if (!isDelivered || !letterId) {
+            return { stampRot: 0, stampDx: 0, stampDy: 0, tamponRot: 0, tamponDx: 0, tamponDy: 0 };
+        }
+        const rand = seededRandom(letterId);
+
+        // Stamp: very subtle variation
+        const stampRot = (rand() * 4) - 2;       // -2° to +2°
+        const stampDx = (rand() * 4) - 2;        // -2pt to +2pt
+        const stampDy = (rand() * 4) - 2;        // -2pt to +2pt
+
+        // Postmark: a bit more variation but still subtle
+        const tamponRot = (rand() * 10) - 5;     // -5° to +5°
+        const tamponDx = (rand() * 8) - 4;       // -4pt to +4pt
+        const tamponDy = (rand() * 6) - 3;       // -3pt to +3pt
+
+        return { stampRot, stampDx, stampDy, tamponRot, tamponDx, tamponDy };
+    }, [isDelivered, letterId]);
 
     const frontInterpolate = flipAnim.interpolate({
         inputRange: [0, 1],
@@ -292,18 +341,20 @@ export default function Postcard({
                                 </View>
                             </View>
                         </View>
-                        {/* STAMP — appears during send animation */}
-                        {stampAnim && (
+                        {/* STAMP — animated during send, static on delivered letters */}
+                        {(stampAnim || isDelivered) && (
                             <Animated.View
                                 style={{
                                     position: 'absolute',
-                                    top: CARD_HEIGHT * STAMP_CENTER_Y_RATIO - STAMP_HEIGHT / 2 + stampOffsetY,
-                                    left: CARD_WIDTH * STAMP_CENTER_X_RATIO - STAMP_WIDTH / 2 + stampOffsetX,
+                                    top: CARD_HEIGHT * STAMP_CENTER_Y_RATIO - STAMP_HEIGHT / 2
+                                        + (isDelivered ? deliveredOffsets.stampDy : stampOffsetY),
+                                    left: CARD_WIDTH * STAMP_CENTER_X_RATIO - STAMP_WIDTH / 2
+                                        + (isDelivered ? deliveredOffsets.stampDx : stampOffsetX),
                                     width: STAMP_WIDTH,
                                     height: STAMP_HEIGHT,
                                     transform: [
-                                        { scale: stampAnim },
-                                        { rotate: `${stampRotation}deg` },
+                                        { scale: isDelivered ? 1 : (stampAnim || 1) },
+                                        { rotate: `${isDelivered ? deliveredOffsets.stampRot : stampRotation}deg` },
                                     ],
                                 }}
                             >
@@ -313,6 +364,44 @@ export default function Postcard({
                                     resizeMode="contain"
                                 />
                             </Animated.View>
+                        )}
+
+                        {/* POSTMARK (tampon) — only on delivered letters, overlaps the stamp */}
+                        {isDelivered && (
+                            <View
+                                style={{
+                                    position: 'absolute',
+                                    // Anchor: circular part of tampon centered on the stamp,
+                                    // wavy lines extend leftward. Clamp to stay within card bounds.
+                                    top: Math.max(
+                                        0,
+                                        Math.min(
+                                            CARD_HEIGHT * STAMP_CENTER_Y_RATIO - TAMPON_HEIGHT / 2
+                                            + deliveredOffsets.tamponDy,
+                                            CARD_HEIGHT - TAMPON_HEIGHT
+                                        )
+                                    ),
+                                    left: Math.max(
+                                        0,
+                                        Math.min(
+                                            CARD_WIDTH * STAMP_CENTER_X_RATIO - TAMPON_WIDTH * 0.72
+                                            + deliveredOffsets.tamponDx,
+                                            CARD_WIDTH - TAMPON_WIDTH
+                                        )
+                                    ),
+                                    width: TAMPON_WIDTH,
+                                    height: TAMPON_HEIGHT,
+                                    transform: [{ rotate: `${deliveredOffsets.tamponRot}deg` }],
+                                    opacity: 0.7,
+                                    overflow: 'hidden',
+                                }}
+                            >
+                                <Image
+                                    source={require('../assets/images/tampon.png')}
+                                    style={{ width: '100%', height: '100%' }}
+                                    resizeMode="contain"
+                                />
+                            </View>
                         )}
                     </ImageBackground>
                 </Animated.View>
@@ -391,6 +480,7 @@ const styles = StyleSheet.create({
     cardBg: {
         width: '100%',
         height: '100%',
+        overflow: 'hidden',
     },
 
     // === RECTO (image) ===

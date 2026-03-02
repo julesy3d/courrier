@@ -126,23 +126,16 @@ export default function ComposeScreen() {
         stampOffsetXRef.current = (Math.random() * 4) - 2;
         stampOffsetYRef.current = (Math.random() * 4) - 2;
 
-        // ── PHASE 1: Stamp appears (spring animation, ~400ms) ──
-        stampAnimValue.setValue(0);
-        Animated.spring(stampAnimValue, {
-            toValue: 1,
-            damping: 12,
-            stiffness: 200,
-            mass: 0.8,
-            useNativeDriver: true,
-        }).start();
+        // ── PHASE 1: Stamp appears ──
+        stampAnimValue.setValue(1);
 
-        // ── PHASE 2: After 600ms, fly the card away ──
+        // ── PHASE 2: After 1100ms, fly the card away ──
         await new Promise<void>((resolve) => {
             setTimeout(() => {
                 Animated.parallel([
                     Animated.timing(sendAnim, {
                         toValue: 1,
-                        duration: 1400,
+                        duration: 1000,
                         easing: Easing.in(Easing.cubic),
                         useNativeDriver: true,
                     }),
@@ -150,7 +143,7 @@ export default function ComposeScreen() {
                     // Fly-away animation COMPLETE — NOW we can unmount the card
                     resolve();
                 });
-            }, 600);
+            }, 1100);
         });
 
         // ── PHASE 3: Card is off-screen. Show spinner. ──
