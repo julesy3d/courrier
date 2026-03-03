@@ -48,6 +48,9 @@ const en = {
     'compose.imagePickerTitle': 'Add a photo',
     'compose.camera': 'Take a photo',
     'compose.library': 'Choose from library',
+    'compose.discard': 'Discard this postcard?',
+    'compose.discardConfirm': 'Discard',
+    'compose.noAddress': "Send to someone who doesn't have an address yet",
 
     // Letters Tab
     'letters.tab': 'Letters',
@@ -133,6 +136,9 @@ const fr = {
     'compose.imagePickerTitle': 'Ajouter une photo',
     'compose.camera': 'Prendre une photo',
     'compose.library': 'Choisir dans la galerie',
+    'compose.discard': 'Supprimer cette carte ?',
+    'compose.discardConfirm': 'Supprimer',
+    'compose.noAddress': 'Envoyer à quelqu\'un qui n\'a pas encore d\'adresse',
 
     // Letters Tab
     'letters.tab': 'Lettres',

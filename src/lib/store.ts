@@ -19,6 +19,8 @@ export type Letter = {
     body: string;
     signature: string | null;
     image_url: string | null;
+    from_name: string | null;
+    to_name: string | null;
     sent_at: string;
     opened_at: string | null;
     delivers_at: string | null;
@@ -52,7 +54,7 @@ interface AuthState {
     fetchReceivedLetters: () => Promise<Letter[]>;
     fetchSentLetters: () => Promise<Letter[]>;
     fetchReturnedLetters: () => Promise<Letter[]>;
-    sendLetter: (body: string, recipientAddress: string, imageUrl: string | null) => Promise<void>;
+    sendLetter: (body: string, recipientAddress: string, imageUrl: string | null, fromName: string | null, toName: string | null) => Promise<void>;
     markLetterOpened: (letterId: string) => Promise<void>;
     loadUserById: (userId: string) => Promise<AppUser | null>;
     fetchAddressBook: () => Promise<AddressBookEntry[]>;
@@ -257,7 +259,7 @@ export const useStore = create<AuthState>((set, get) => ({
         return data as Letter[];
     },
 
-    sendLetter: async (body: string, recipientAddress: string, imageUrl: string | null) => {
+    sendLetter: async (body: string, recipientAddress: string, imageUrl: string | null, fromName: string | null, toName: string | null) => {
         const { currentUser } = get();
         if (!currentUser) throw new Error("No user");
 
@@ -270,6 +272,13 @@ export const useStore = create<AuthState>((set, get) => ({
 
         if (imageUrl) {
             newLetter.image_url = imageUrl;
+        }
+
+        if (fromName && fromName.trim()) {
+            newLetter.from_name = fromName.trim();
+        }
+        if (toName && toName.trim()) {
+            newLetter.to_name = toName.trim();
         }
 
         const { error } = await supabase

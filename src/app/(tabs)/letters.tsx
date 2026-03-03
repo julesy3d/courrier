@@ -24,6 +24,8 @@ export default function LettersScreen() {
 
     const [selectedLetter, setSelectedLetter] = useState<any>(null);
     const [senderAddress, setSenderAddress] = useState<string>('');
+    const [viewFromName, setViewFromName] = useState<string>('');
+    const [viewToName, setViewToName] = useState<string>('');
     const postcardOpacity = useRef(new Animated.Value(0)).current;
 
     const openLetter = async (letter: any) => {
@@ -37,6 +39,9 @@ export default function LettersScreen() {
             const sender = await loadUserById(letter.sender_id);
             setSenderAddress(sender?.address || t('letters.unknownSender'));
         }
+
+        setViewFromName(letter.from_name || '');
+        setViewToName(letter.to_name || '');
 
         if (!letter.opened_at && letter._type !== 'returned') {
             markLetterOpened(letter.id).catch(console.error);
@@ -63,6 +68,8 @@ export default function LettersScreen() {
         }).start(() => {
             setSelectedLetter(null);
             setSenderAddress('');
+            setViewFromName('');
+            setViewToName('');
         });
     };
 
@@ -237,6 +244,8 @@ export default function LettersScreen() {
                             imageUri={selectedLetter.image_url}
                             body={selectedLetter.body}
                             fromAddressUser={{ address: senderAddress } as any}
+                            fromName={viewFromName}
+                            toName={viewToName}
                             viewToAddress={
                                 selectedLetter._type === 'returned'
                                     ? selectedLetter.recipient_address

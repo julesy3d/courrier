@@ -1,10 +1,16 @@
 import { Ionicons } from '@expo/vector-icons';
+import { Asset } from 'expo-asset';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
+import * as Sharing from 'expo-sharing';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Animated, Dimensions, Easing, Keyboard, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { captureRef } from 'react-native-view-shot';
+import { generateUSDZ, shareViaIMessage } from '../../../modules/postcard-usdz';
 import Postcard from '../../components/Postcard';
+import PostcardCapture from '../../components/PostcardCapture';
 import { useTranslation } from '../../lib/i18n';
 import { pickAndCompressImage, uploadPostcardImage } from '../../lib/imageUtils';
 import { playSend } from '../../lib/sounds';
@@ -19,9 +25,21 @@ type ComposeStep = 'compose' | 'sending' | 'sent';
 export default function ComposeScreen() {
     const { currentUser, sendLetter } = useStore();
     const { t } = useTranslation();
+    const insets = useSafeAreaInsets();
+
+    const [videoUri, setVideoUri] = useState<string | null>(null);
+
+    useEffect(() => {
+        const loadVideo = async () => {
+            const asset = Asset.fromModule(require('../../assets/video/WRITE_background.mp4'));
+            await asset.downloadAsync();
+            setVideoUri(asset.localUri || asset.uri);
+        };
+        loadVideo();
+    }, []);
 
     const player = useVideoPlayer(
-        require('../../assets/video/WRITE_background.mp4'),
+        videoUri,
         (player: any) => {
             player.loop = true;
             player.muted = true;
@@ -46,6 +64,10 @@ export default function ComposeScreen() {
     const sendAnim = useRef(new Animated.Value(0)).current;
 
     const [isSending, setIsSending] = useState(false);
+
+    const rectoRef = useRef<View>(null);
+    const versoRef = useRef<View>(null);
+    const compositeRef = useRef<View>(null);
 
     const keyboardOffset = useRef(new Animated.Value(0)).current;
     const isKeyboardVisible = useRef(false);
@@ -110,6 +132,142 @@ export default function ComposeScreen() {
         );
     };
 
+    const handleSharePostcard = async () => {
+        try {
+            if (!rectoRef.current || !versoRef.current) {
+                Alert.alert('Error', 'Capture views not ready');
+                return;
+            }
+
+            // Capture both sides as JPEG
+            const rectoUri = await captureRef(rectoRef, {
+                format: 'jpg',
+                quality: 0.9,
+                result: 'tmpfile',
+            });
+            const versoUri = await captureRef(versoRef, {
+                format: 'jpg',
+                quality: 0.9,
+                result: 'tmpfile',
+            });
+
+            const rectoUrl = rectoUri.startsWith('file://') ? rectoUri : 'file://' + rectoUri;
+            const versoUrl = versoUri.startsWith('file://') ? versoUri : 'file://' + versoUri;
+
+            // Generate USDZ
+            const usdzPath = await generateUSDZ(rectoUrl, versoUrl);
+
+            // Build filename from recipient name
+            let displayName = toName.trim();
+            if (!displayName) {
+                displayName = 'toi';
+            }
+            // If name is longer than 15 chars, use first initial
+            if (displayName.length > 15) {
+                displayName = displayName.charAt(0);
+            }
+            const filename = `carte postale pour ${displayName}.usdz`;
+
+            // Open iMessage with the USDZ attached
+            const messageText = "Je t'ai envoye une carte postale ! Telecharge Courrier pour y repondre.";
+            const result = await shareViaIMessage(usdzPath, messageText, filename);
+
+            if (result.status === 'sent') {
+                setStep('sent');
+
+                setTimeout(() => {
+                    Animated.timing(postcardOpacity, {
+                        toValue: 0,
+                        duration: 400,
+                        useNativeDriver: true,
+                    }).start(() => {
+                        setBody('');
+                        setToName('');
+                        setToAddress('');
+                        setFromName('');
+                        setImageUri(null);
+                        setSendError(null);
+                        sendAnim.setValue(0);
+                        stampAnimValue.setValue(0);
+                        setCardKey(k => k + 1);
+                        setStep('compose');
+                        setScreenState('video');
+                        setIsSending(false);
+                    });
+                }, 3000);
+            }
+            // If cancelled, do nothing. User can continue editing.
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            Alert.alert('Erreur', msg);
+            console.error('Share postcard error:', e);
+        }
+    };
+
+    const handleShareImages = async () => {
+        try {
+            if (!compositeRef.current) {
+                Alert.alert('Error', 'Capture view not ready');
+                return;
+            }
+
+            const compositeUri = await captureRef(compositeRef, {
+                format: 'png',
+                quality: 1,
+                result: 'tmpfile',
+            });
+
+            const compositeUrl = compositeUri.startsWith('file://') ? compositeUri : 'file://' + compositeUri;
+
+            let displayName = toName.trim() || 'toi';
+            if (displayName.length > 15) displayName = displayName.charAt(0);
+
+            const filePath = FileSystem.cacheDirectory + 'carte_postale_pour_' + displayName + '.png';
+            await FileSystem.copyAsync({ from: compositeUrl, to: filePath });
+
+            if (!(await Sharing.isAvailableAsync())) {
+                Alert.alert('Erreur', 'Le partage est indisponible');
+                return;
+            }
+
+            await Sharing.shareAsync(filePath, {
+                mimeType: 'image/png',
+                dialogTitle: 'Carte postale pour ' + displayName,
+            });
+
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            if (!msg.toLowerCase().includes('cancel') && !msg.toLowerCase().includes('dismiss')) {
+                Alert.alert('Erreur', msg);
+            }
+        }
+    };
+
+    const handleSharePrompt = () => {
+        if (Platform.OS === 'android') {
+            handleShareImages();
+        } else {
+            Alert.alert(
+                'Envoyer la carte',
+                'Comment souhaitez-vous partager cette carte postale ?',
+                [
+                    {
+                        text: 'iMessage (3D)',
+                        onPress: handleSharePostcard,
+                    },
+                    {
+                        text: 'Autre messagerie',
+                        onPress: handleShareImages,
+                    },
+                    {
+                        text: 'Annuler',
+                        style: 'cancel',
+                    },
+                ]
+            );
+        }
+    };
+
     const canSend = !!imageUri && body.trim().length > 0 && toAddress.trim().length > 0;
 
     const handleSend = async () => {
@@ -157,7 +315,7 @@ export default function ComposeScreen() {
                 imageUrl = await uploadPostcardImage(imageUri, currentUser!.id, supabase);
             }
 
-            await sendLetter(body.trim(), toAddress.trim(), imageUrl);
+            await sendLetter(body.trim(), toAddress.trim(), imageUrl, fromName.trim() || null, toName.trim() || null);
 
             // Enforce minimum "sending" display time from the moment user pressed send
             const elapsed = Date.now() - sendStart;
@@ -198,10 +356,34 @@ export default function ComposeScreen() {
             }).start();
             stampAnimValue.setValue(0);
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-            setSendError(t('compose.error'));
+            const msg = e instanceof Error ? e.message : String(e);
+            setSendError(`${t('compose.error')}\n\n[${msg}]`);
             setStep('compose');
             setIsSending(false);
         }
+    };
+
+    const hasContent = !!(body.trim() || imageUri || fromName.trim() || toName.trim() || toAddress.trim());
+
+    const handleDiscard = () => {
+        Alert.alert(
+            t('compose.discard'),
+            '',
+            [
+                { text: t('common.cancel'), style: 'cancel' },
+                {
+                    text: t('compose.discardConfirm'),
+                    style: 'destructive',
+                    onPress: () => {
+                        setBody('');
+                        setFromName('');
+                        setToName('');
+                        setToAddress('');
+                        setImageUri(null);
+                    },
+                },
+            ]
+        );
     };
 
     const cardTranslateY = sendAnim.interpolate({
@@ -215,13 +397,41 @@ export default function ComposeScreen() {
 
     return (
         <View style={{ flex: 1 }}>
-            <VideoView
-                player={player}
-                style={StyleSheet.absoluteFillObject}
-                nativeControls={false}
-                contentFit="cover"
-                allowsVideoFrameAnalysis={false}
+            {hasContent && (
+                <TouchableOpacity
+                    onPress={handleDiscard}
+                    style={{
+                        position: 'absolute',
+                        top: insets.top + 12,
+                        right: 20,
+                        zIndex: 100,
+                        padding: 8,
+                    }}
+                >
+                    <Ionicons name="trash-outline" size={22} color="rgba(255,255,255,0.7)" />
+                </TouchableOpacity>
+            )}
+            <PostcardCapture
+                imageUri={imageUri}
+                body={body}
+                fromName={fromName}
+                toName={toName}
+                fromAddress={currentUser?.address || ''}
+                toAddress={toAddress}
+                rectoRef={rectoRef}
+                versoRef={versoRef}
+                compositeRef={compositeRef}
             />
+
+            {videoUri && player && (
+                <VideoView
+                    player={player}
+                    style={StyleSheet.absoluteFillObject}
+                    nativeControls={false}
+                    contentFit="cover"
+                    allowsVideoFrameAnalysis={false}
+                />
+            )}
 
             <SafeAreaView edges={['top']} style={{ flex: 1 }}>
 
@@ -354,6 +564,7 @@ export default function ComposeScreen() {
                                                 stampRotation={stampRotationRef.current}
                                                 stampOffsetX={stampOffsetXRef.current}
                                                 stampOffsetY={stampOffsetYRef.current}
+                                                onSharePostcard={handleSharePrompt}
                                             />
                                             {sendError && <Text style={styles.errorText}>{sendError}</Text>}
                                         </Animated.View>

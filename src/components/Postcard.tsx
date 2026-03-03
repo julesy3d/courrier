@@ -74,6 +74,7 @@ export interface PostcardProps {
     onSend?: () => void;
     canSend?: boolean;
     isSending?: boolean;
+    onSharePostcard?: () => void;
 
     // Stamp animation (for send flow)
     stampAnim?: Animated.Value;      // Scale value 0→1, drives stamp appearance
@@ -95,7 +96,7 @@ export default function Postcard({
     fromAddressUser,
     viewToAddress,
     dateStr,
-    onSend, canSend = false, isSending = false,
+    onSend, canSend = false, isSending = false, onSharePostcard,
     stampAnim, stampRotation = 0, stampOffsetX = 0, stampOffsetY = 0,
     isDelivered = false,
     letterId,
@@ -286,7 +287,12 @@ export default function Postcard({
                                         {!isEditable ? (
                                             <View>
                                                 <Text style={styles.versoLabel}>{t('letter.detail.from')}</Text>
-                                                <Text style={[styles.readOnlyText, { color: Theme.colors.text }]}>
+                                                {fromName ? (
+                                                    <Text style={[styles.readOnlyText, { color: Theme.colors.text }]}>
+                                                        {fromName}
+                                                    </Text>
+                                                ) : null}
+                                                <Text style={[styles.readOnlyText, { color: Theme.colors.text, ...(fromName ? { fontSize: 11, marginTop: 2 } : {}) }]}>
                                                     {fromAddressUser?.address || 'Unknown'}
                                                 </Text>
                                             </View>
@@ -328,11 +334,27 @@ export default function Postcard({
                                                     autoCorrect={false}
                                                     autoCapitalize="none"
                                                 />
+                                                {(!toAddress || !toAddress.trim()) && onSharePostcard && (
+                                                    <TouchableOpacity onPress={onSharePostcard} style={{ marginTop: 8 }}>
+                                                        <Text style={{
+                                                            fontSize: 12,
+                                                            color: Theme.colors.accent,
+                                                            fontStyle: 'italic',
+                                                        }}>
+                                                            {t('compose.noAddress')}
+                                                        </Text>
+                                                    </TouchableOpacity>
+                                                )}
                                             </>
                                         ) : (
                                             <View>
                                                 <Text style={styles.versoLabel}>{t('letter.detail.to')}</Text>
-                                                <Text style={[styles.readOnlyText, { color: Theme.colors.text }]}>
+                                                {toName ? (
+                                                    <Text style={[styles.readOnlyText, { color: Theme.colors.text }]}>
+                                                        {toName}
+                                                    </Text>
+                                                ) : null}
+                                                <Text style={[styles.readOnlyText, { color: Theme.colors.text, ...(toName ? { fontSize: 11, marginTop: 2 } : {}) }]}>
                                                     {viewToAddress || currentUser?.address || '—'}
                                                 </Text>
                                             </View>
@@ -408,44 +430,42 @@ export default function Postcard({
             </View>
 
             {/* FOOTER ACTIONS */}
-            {!isSending && (
-                <View style={[styles.footerContainer, { minHeight: 80, justifyContent: 'flex-end' }]}>
-                    {side === 'recto' ? (
-                        <TouchableOpacity
-                            style={styles.actionButtonRight}
-                            onPress={flipToBack}
-                            disabled={!canFlipToVerso}
-                        >
-                            <Text style={[
-                                styles.actionTextRight,
-                                !canFlipToVerso && { color: Theme.colors.secondary }
-                            ]}>
-                                {t('compose.turnOver')}
-                            </Text>
-                        </TouchableOpacity>
-                    ) : (
-                        <View style={styles.versoFooter}>
-                            {isEditable && (
-                                <Text style={styles.hintText}>{t('compose.addressHint')}</Text>
-                            )}
-                            <View style={styles.actionRow}>
-                                <TouchableOpacity onPress={flipToFront} style={styles.actionButtonLeft}>
-                                    <Text style={styles.actionTextLeft}>{t('compose.turnBack')}</Text>
-                                </TouchableOpacity>
+            <View style={[styles.footerContainer, { minHeight: 80, justifyContent: 'flex-end', opacity: isSending ? 0 : 1, pointerEvents: isSending ? 'none' : 'auto' }]}>
+                {side === 'recto' ? (
+                    <TouchableOpacity
+                        style={styles.actionButtonRight}
+                        onPress={flipToBack}
+                        disabled={!canFlipToVerso}
+                    >
+                        <Text style={[
+                            styles.actionTextRight,
+                            !canFlipToVerso && { color: Theme.colors.secondary }
+                        ]}>
+                            {t('compose.turnOver')}
+                        </Text>
+                    </TouchableOpacity>
+                ) : (
+                    <View style={styles.versoFooter}>
+                        {isEditable && (
+                            <Text style={styles.hintText}>{t('compose.addressHint')}</Text>
+                        )}
+                        <View style={styles.actionRow}>
+                            <TouchableOpacity onPress={flipToFront} style={styles.actionButtonLeft}>
+                                <Text style={styles.actionTextLeft}>{t('compose.turnBack')}</Text>
+                            </TouchableOpacity>
 
-                                {isEditable ? (
-                                    <TouchableOpacity onPress={onSend} disabled={!canSend} style={styles.actionButtonRight}>
-                                        <Text style={[
-                                            styles.actionTextRight,
-                                            !canSend && { color: Theme.colors.secondary }
-                                        ]}>{t('compose.send')}</Text>
-                                    </TouchableOpacity>
-                                ) : null}
-                            </View>
+                            {isEditable ? (
+                                <TouchableOpacity onPress={onSend} disabled={!canSend} style={styles.actionButtonRight}>
+                                    <Text style={[
+                                        styles.actionTextRight,
+                                        !canSend && { color: Theme.colors.secondary }
+                                    ]}>{t('compose.send')}</Text>
+                                </TouchableOpacity>
+                            ) : null}
                         </View>
-                    )}
-                </View>
-            )}
+                    </View>
+                )}
+            </View>
         </View>
     );
 }

@@ -1,4 +1,5 @@
 import { useFocusEffect } from '@react-navigation/native';
+import { Asset } from 'expo-asset';
 import * as Haptics from 'expo-haptics';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -95,8 +96,19 @@ export default function AddressesScreen() {
         })
     ).current;
 
+    const [videoUri, setVideoUri] = useState<string | null>(null);
+
+    useEffect(() => {
+        const loadVideo = async () => {
+            const asset = Asset.fromModule(require('../../assets/video/BOOK_background.mp4'));
+            await asset.downloadAsync();
+            setVideoUri(asset.localUri || asset.uri);
+        };
+        loadVideo();
+    }, []);
+
     const player = useVideoPlayer(
-        require('../../assets/video/BOOK_background.mp4'),
+        videoUri,
         (player: any) => {
             player.loop = true;
             player.muted = true;
@@ -273,13 +285,15 @@ export default function AddressesScreen() {
 
     return (
         <View style={styles.container}>
-            <VideoView
-                player={player}
-                style={StyleSheet.absoluteFillObject}
-                nativeControls={false}
-                contentFit="cover"
-                allowsVideoFrameAnalysis={false}
-            />
+            {videoUri && player && (
+                <VideoView
+                    player={player}
+                    style={StyleSheet.absoluteFillObject}
+                    nativeControls={false}
+                    contentFit="cover"
+                    allowsVideoFrameAnalysis={false}
+                />
+            )}
 
             <SafeAreaView edges={['top']} style={{ flex: 1 }}>
 

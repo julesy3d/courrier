@@ -48,7 +48,8 @@
         {
           "cameraPermission": "Courrier utilise l'appareil photo pour vos cartes postales."
         }
-      ]
+      ],
+      "expo-sharing"
     ],
     "experiments": {
       "typedRoutes": true,
