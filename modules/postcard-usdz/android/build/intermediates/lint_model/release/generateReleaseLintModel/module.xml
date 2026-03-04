@@ -1,0 +1,18 @@
+<lint-module
+    format="1"
+    dir="/Users/jules/Documents/COURRIER/modules/postcard-usdz/android"
+    name=":postcard-usdz"
+    type="LIBRARY"
+    maven="expo.modules.postcardusdz:postcard-usdz:0.7.9"
+    agpVersion="8.12.0"
+    buildFolder="build"
+    bootClassPath="/Users/jules/Library/Android/sdk/platforms/android-36/android.jar:/Users/jules/Library/Android/sdk/build-tools/35.0.0/core-lambda-stubs.jar"
+    javaSourceLevel="17"
+    compileTarget="android-36"
+    neverShrinking="true">
+  <lintOptions
+      absolutePaths="true"
+      checkReleaseBuilds="true"
+      explainIssues="true"/>
+  <variant name="release"/>
+</lint-module>

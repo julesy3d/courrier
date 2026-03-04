@@ -1,14 +1,14 @@
 {
   "expo": {
-    "name": "COURRIER",
-    "slug": "COURRIER",
+    "name": "Postal",
+    "slug": "postal",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "courrier",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon",
+      "icon": "./assets/images/icon.png",
       "bundleIdentifier": "com.julesbenveniste.Courrier",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
@@ -46,7 +46,7 @@
       [
         "expo-image-picker",
         {
-          "cameraPermission": "Courrier utilise l'appareil photo pour vos cartes postales."
+          "cameraPermission": "Postal utilise l'appareil photo pour vos cartes postales."
         }
       ],
       "expo-sharing"

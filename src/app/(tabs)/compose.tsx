@@ -5,7 +5,7 @@ import * as Haptics from 'expo-haptics';
 import * as Sharing from 'expo-sharing';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, Dimensions, Easing, Keyboard, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, AppState, Dimensions, Easing, Keyboard, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { captureRef } from 'react-native-view-shot';
 import { generateUSDZ, shareViaIMessage } from '../../../modules/postcard-usdz';
@@ -47,6 +47,15 @@ export default function ComposeScreen() {
             player.play();
         }
     );
+
+    useEffect(() => {
+        const subscription = AppState.addEventListener('change', (state) => {
+            if (state === 'active' && player) {
+                player.play();
+            }
+        });
+        return () => subscription.remove();
+    }, [player]);
 
     const [step, setStep] = useState<ComposeStep>('compose');
     const [cardKey, setCardKey] = useState(0);

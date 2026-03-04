@@ -4,9 +4,10 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import { Alert, Platform } from 'react-native';
+import { processPhoto } from './photoProcessor';
 
-// Target dimensions: match postcard aspect ratio (297:422), small for aggressive compression
-const TARGET_WIDTH = 400;
+// Target dimensions: match postcard aspect ratio (297:422), high-res for Skia processing
+const TARGET_WIDTH = 1200;
 const TARGET_HEIGHT = Math.round(TARGET_WIDTH * (422 / 297)); // ≈ 568
 
 export type ImagePickSource = 'camera' | 'library';
@@ -92,11 +93,22 @@ export async function pickAndCompressImage(source: ImagePickSource): Promise<str
     // Resize to target dimensions
     context.resize({ width: TARGET_WIDTH, height: TARGET_HEIGHT });
 
-    // Render and save as compressed WebP
-    const rendered = await context.renderAsync();
-    const saved = await rendered.saveAsync({
+    // Render intermediate high-quality image
+    const intermediate = await context.renderAsync();
+    const intermediateSave = await intermediate.saveAsync({
+        format: SaveFormat.JPEG,
+        compress: 0.95,
+    });
+
+    // Run custom Skia processing (warmth, vignette, grain)
+    const processedUri = await processPhoto(intermediateSave.uri);
+
+    // Second pass to compress specifically to WebP 0.5 (less aggressive since Skia adds grain)
+    const finalContext = ImageManipulator.manipulate(processedUri);
+    const finalRender = await finalContext.renderAsync();
+    const saved = await finalRender.saveAsync({
         format: SaveFormat.WEBP,
-        compress: 0.25,
+        compress: 0.5,
     });
 
     return saved.uri;

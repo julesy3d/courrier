@@ -105,6 +105,8 @@ export default function Postcard({
     const { currentUser } = useStore();
     const [side, setSide] = useState<'recto' | 'verso'>('recto');
     const [isFlipped, setIsFlipped] = useState(false);
+    const [toNameFocused, setToNameFocused] = useState(false);
+    const [toAddressFocused, setToAddressFocused] = useState(false);
     const flipAnim = useRef(new Animated.Value(0)).current;
 
     // Deterministic random placement for delivered letters
@@ -324,6 +326,8 @@ export default function Postcard({
                                                     placeholderTextColor={Theme.colors.secondary + '60'}
                                                     value={toName}
                                                     onChangeText={onToNameChange}
+                                                    onFocus={() => setToNameFocused(true)}
+                                                    onBlur={() => setToNameFocused(false)}
                                                 />
                                                 <TextInput
                                                     style={[styles.versoInput, { marginTop: 12 }]}
@@ -333,8 +337,10 @@ export default function Postcard({
                                                     onChangeText={onToAddressChange}
                                                     autoCorrect={false}
                                                     autoCapitalize="none"
+                                                    onFocus={() => setToAddressFocused(true)}
+                                                    onBlur={() => setToAddressFocused(false)}
                                                 />
-                                                {(!toAddress || !toAddress.trim()) && onSharePostcard && (
+                                                {((toNameFocused && (!toName || !toName.trim())) || (toAddressFocused && (!toAddress || !toAddress.trim()))) && onSharePostcard && (
                                                     <TouchableOpacity onPress={onSharePostcard} style={{ marginTop: 8 }}>
                                                         <Text style={{
                                                             fontSize: 12,

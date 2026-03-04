@@ -1,0 +1,7 @@
+expo.modules.postcardusdz.postcard-usdz-pngs-0 /Users/jules/Documents/COURRIER/modules/postcard-usdz/android/build/generated/res/pngs/release
+expo.modules.postcardusdz.postcard-usdz-resValues-1 /Users/jules/Documents/COURRIER/modules/postcard-usdz/android/build/generated/res/resValues/release
+expo.modules.postcardusdz.postcard-usdz-mergeReleaseResources-2 /Users/jules/Documents/COURRIER/modules/postcard-usdz/android/build/intermediates/incremental/release/mergeReleaseResources/merged.dir
+expo.modules.postcardusdz.postcard-usdz-mergeReleaseResources-3 /Users/jules/Documents/COURRIER/modules/postcard-usdz/android/build/intermediates/incremental/release/mergeReleaseResources/stripped.dir
+expo.modules.postcardusdz.postcard-usdz-release-4 /Users/jules/Documents/COURRIER/modules/postcard-usdz/android/build/intermediates/merged_res/release/mergeReleaseResources
+expo.modules.postcardusdz.postcard-usdz-main-5 /Users/jules/Documents/COURRIER/modules/postcard-usdz/android/src/main/res
+expo.modules.postcardusdz.postcard-usdz-release-6 /Users/jules/Documents/COURRIER/modules/postcard-usdz/android/src/release/res

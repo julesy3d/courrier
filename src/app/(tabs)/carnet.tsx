@@ -4,7 +4,7 @@ import * as Haptics from 'expo-haptics';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-    ActivityIndicator, Alert, Animated, Dimensions, FlatList,
+    ActivityIndicator, Alert, Animated, AppState, Dimensions, FlatList,
     ImageBackground, Keyboard, PanResponder, ScrollView, StyleSheet, Text,
     TextInput, TouchableOpacity, View
 } from 'react-native';
@@ -116,6 +116,15 @@ export default function AddressesScreen() {
             player.play();
         }
     );
+
+    useEffect(() => {
+        const subscription = AppState.addEventListener('change', (state) => {
+            if (state === 'active' && player) {
+                player.play();
+            }
+        });
+        return () => subscription.remove();
+    }, [player]);
 
     // States for inline forms
     const [showAddForm, setShowAddForm] = useState(false);
