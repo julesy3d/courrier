@@ -1,6 +1,7 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { Asset } from 'expo-asset';
 import * as Haptics from 'expo-haptics';
+import { useRouter } from 'expo-router';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -27,9 +28,11 @@ export default function AddressesScreen() {
         deleteAddressBookEntry,
         updateAddress,
         updateLanguage,
-        isAddressTaken
+        isAddressTaken,
+        setComposePrefill
     } = useStore();
     const { t } = useTranslation();
+    const router = useRouter();
 
     const insets = useSafeAreaInsets();
     const tabBarHeight = 49 + insets.bottom; // Native tab bar height (49pt) + safe area
@@ -69,6 +72,19 @@ export default function AddressesScreen() {
             setShowAddForm(false);
             setShowAddressBuilder(false);
         });
+    };
+
+    const handleContactPress = (entry: AddressBookEntry) => {
+        setComposePrefill({
+            toName: entry.name,
+            toAddress: entry.address,
+        });
+
+        closeSheet();
+
+        setTimeout(() => {
+            router.navigate('/(tabs)/compose');
+        }, 400);
     };
 
     const panResponder = useRef(
@@ -284,10 +300,14 @@ export default function AddressesScreen() {
                 renderRightActions={renderRightActions}
                 onSwipeableOpen={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)}
             >
-                <View style={[styles.row, { backgroundColor: 'transparent' }]}>
+                <TouchableOpacity
+                    activeOpacity={0.6}
+                    style={[styles.row, { backgroundColor: 'transparent' }]}
+                    onPress={() => handleContactPress(item)}
+                >
                     <Text style={styles.entryName}>{item.name}</Text>
                     <Text style={styles.entryAddress}>{item.address}</Text>
-                </View>
+                </TouchableOpacity>
             </Swipeable>
         );
     };

@@ -148,7 +148,7 @@ export default function AddressBuilder({
     };
 
     const handleNameChange = (val: string) => {
-        const filtered = val.replace(/[^a-zA-Z\s]/g, '');
+        const filtered = val.replace(/[^\p{L}\s]/gu, '');
         if (filtered.length <= 20) {
             setName(filtered);
         }

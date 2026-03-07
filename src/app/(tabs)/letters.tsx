@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
@@ -11,7 +12,7 @@ import { useStore } from '../../lib/store';
 import { Theme } from '../../theme';
 
 export default function LettersScreen() {
-    const { fetchReceivedLetters, fetchReturnedLetters, loadUserById, markLetterOpened, currentUser } = useStore();
+    const { fetchReceivedLetters, fetchReturnedLetters, loadUserById, markLetterOpened, currentUser, setComposePrefill } = useStore();
     const [letters, setLetters] = useState<any[]>([]);
     const [senderMap, setSenderMap] = useState<Record<string, string>>({});
     const [previousLetterIds, setPreviousLetterIds] = useState<Set<string>>(new Set());
@@ -71,6 +72,21 @@ export default function LettersScreen() {
             setViewFromName('');
             setViewToName('');
         });
+    };
+
+    const handleReply = () => {
+        if (!senderAddress || senderAddress === t('letters.unknownSender')) return;
+
+        setComposePrefill({
+            toAddress: senderAddress,
+        });
+
+        closeLetter();
+
+        // Small delay to let the close animation finish
+        setTimeout(() => {
+            router.navigate('/(tabs)/compose');
+        }, 350);
     };
 
     const loadLetters = useCallback(async () => {
@@ -266,6 +282,32 @@ export default function LettersScreen() {
                         }}>
                             {new Date(selectedLetter.sent_at).toLocaleDateString(undefined, { dateStyle: 'full' })}
                         </Text>
+                        {selectedLetter._type !== 'returned' && (
+                            <TouchableOpacity
+                                onPress={handleReply}
+                                style={{
+                                    flexDirection: 'row',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    marginTop: 16,
+                                    padding: 10,
+                                }}
+                            >
+                                <Ionicons name="arrow-undo-outline" size={18} color="rgba(250,249,246,0.8)" />
+                                <Text style={{
+                                    fontFamily: 'Georgia',
+                                    fontSize: 13,
+                                    color: 'rgba(250,249,246,0.8)',
+                                    marginLeft: 8,
+                                    textShadowColor: 'rgba(0,0,0,0.5)',
+                                    textShadowOffset: { width: 0, height: 1 },
+                                    textShadowRadius: 3,
+                                }}>
+                                    {t('letter.reply')}
+                                </Text>
+                            </TouchableOpacity>
+                        )}
+
                     </View>
                 </Animated.View>
             )}

@@ -1,10 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
 import * as Sharing from 'expo-sharing';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Animated, AppState, Dimensions, Easing, Keyboard, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { captureRef } from 'react-native-view-shot';
@@ -23,8 +24,8 @@ const { height: screenHeight } = Dimensions.get('window');
 type ComposeStep = 'compose' | 'sending' | 'sent';
 
 export default function ComposeScreen() {
-    const { currentUser, sendLetter } = useStore();
-    const { t } = useTranslation();
+    const { currentUser, sendLetter, composePrefill, clearComposePrefill } = useStore();
+    const { t, locale } = useTranslation();
     const insets = useSafeAreaInsets();
 
     const [videoUri, setVideoUri] = useState<string | null>(null);
@@ -58,14 +59,39 @@ export default function ComposeScreen() {
     }, [player]);
 
     const [step, setStep] = useState<ComposeStep>('compose');
+    const [isFlipped, setIsFlipped] = useState(false);
     const [cardKey, setCardKey] = useState(0);
     const [screenState, setScreenState] = useState<'video' | 'writing'>('video');
     const postcardOpacity = useRef(new Animated.Value(0)).current;
 
+    useFocusEffect(
+        useCallback(() => {
+            if (composePrefill) {
+                if (composePrefill.toName) {
+                    setToName(composePrefill.toName);
+                }
+                if (composePrefill.toAddress) {
+                    setToAddress(composePrefill.toAddress);
+                }
+                clearComposePrefill();
+
+                // If the postcard isn't visible yet, show it
+                if (screenState === 'video') {
+                    setScreenState('writing');
+                    postcardOpacity.setValue(0);
+                    Animated.timing(postcardOpacity, {
+                        toValue: 1,
+                        duration: 400,
+                        useNativeDriver: true,
+                    }).start();
+                }
+            }
+        }, [composePrefill])
+    );
+
     const [body, setBody] = useState('');
     const [toName, setToName] = useState('');
     const [toAddress, setToAddress] = useState('');
-    const [fromName, setFromName] = useState('');
 
     const [imageUri, setImageUri] = useState<string | null>(null);
 
@@ -175,10 +201,12 @@ export default function ComposeScreen() {
             if (displayName.length > 15) {
                 displayName = displayName.charAt(0);
             }
-            const filename = `carte postale pour ${displayName}.usdz`;
+            const filename = locale === 'fr'
+                ? `carte postale pour ${displayName}.usdz`
+                : `postcard for ${displayName}.usdz`;
 
             // Open iMessage with the USDZ attached
-            const messageText = "Je t'ai envoye une carte postale ! Telecharge Courrier pour y repondre.";
+            const messageText = t('share.iMessageText');
             const result = await shareViaIMessage(usdzPath, messageText, filename);
 
             if (result.status === 'sent') {
@@ -193,8 +221,8 @@ export default function ComposeScreen() {
                         setBody('');
                         setToName('');
                         setToAddress('');
-                        setFromName('');
                         setImageUri(null);
+                        setIsFlipped(false);
                         setSendError(null);
                         sendAnim.setValue(0);
                         stampAnimValue.setValue(0);
@@ -231,7 +259,8 @@ export default function ComposeScreen() {
             let displayName = toName.trim() || 'toi';
             if (displayName.length > 15) displayName = displayName.charAt(0);
 
-            const filePath = FileSystem.cacheDirectory + 'carte_postale_pour_' + displayName + '.png';
+            const prefix = locale === 'fr' ? 'carte_postale_pour_' : 'postcard_for_';
+            const filePath = FileSystem.cacheDirectory + prefix + displayName + '.png';
             await FileSystem.copyAsync({ from: compositeUrl, to: filePath });
 
             if (!(await Sharing.isAvailableAsync())) {
@@ -241,7 +270,7 @@ export default function ComposeScreen() {
 
             await Sharing.shareAsync(filePath, {
                 mimeType: 'image/png',
-                dialogTitle: 'Carte postale pour ' + displayName,
+                dialogTitle: locale === 'fr' ? 'Carte postale pour ' + displayName : 'Postcard for ' + displayName,
             });
 
         } catch (e) {
@@ -257,19 +286,19 @@ export default function ComposeScreen() {
             handleShareImages();
         } else {
             Alert.alert(
-                'Envoyer la carte',
-                'Comment souhaitez-vous partager cette carte postale ?',
+                t('share.promptTitle'),
+                t('share.promptMessage'),
                 [
                     {
-                        text: 'iMessage (3D)',
+                        text: t('share.iMessage'),
                         onPress: handleSharePostcard,
                     },
                     {
-                        text: 'Autre messagerie',
+                        text: t('share.otherMessenger'),
                         onPress: handleShareImages,
                     },
                     {
-                        text: 'Annuler',
+                        text: t('common.cancel'),
                         style: 'cancel',
                     },
                 ]
@@ -324,7 +353,7 @@ export default function ComposeScreen() {
                 imageUrl = await uploadPostcardImage(imageUri, currentUser!.id, supabase);
             }
 
-            await sendLetter(body.trim(), toAddress.trim(), imageUrl, fromName.trim() || null, toName.trim() || null);
+            await sendLetter(body.trim(), toAddress.trim(), imageUrl, null, toName.trim() || null);
 
             // Enforce minimum "sending" display time from the moment user pressed send
             const elapsed = Date.now() - sendStart;
@@ -345,8 +374,8 @@ export default function ComposeScreen() {
                     setBody('');
                     setToName('');
                     setToAddress('');
-                    setFromName('');
                     setImageUri(null);
+                    setIsFlipped(false);
                     setSendError(null);
                     sendAnim.setValue(0);
                     stampAnimValue.setValue(0);
@@ -372,7 +401,7 @@ export default function ComposeScreen() {
         }
     };
 
-    const hasContent = !!(body.trim() || imageUri || fromName.trim() || toName.trim() || toAddress.trim());
+    const hasContent = !!(body.trim() || imageUri || toName.trim() || toAddress.trim());
 
     const handleDiscard = () => {
         Alert.alert(
@@ -385,10 +414,10 @@ export default function ComposeScreen() {
                     style: 'destructive',
                     onPress: () => {
                         setBody('');
-                        setFromName('');
                         setToName('');
                         setToAddress('');
                         setImageUri(null);
+                        setIsFlipped(false);
                     },
                 },
             ]
@@ -406,30 +435,15 @@ export default function ComposeScreen() {
 
     return (
         <View style={{ flex: 1 }}>
-            {hasContent && (
-                <TouchableOpacity
-                    onPress={handleDiscard}
-                    style={{
-                        position: 'absolute',
-                        top: insets.top + 12,
-                        right: 20,
-                        zIndex: 100,
-                        padding: 8,
-                    }}
-                >
-                    <Ionicons name="trash-outline" size={22} color="rgba(255,255,255,0.7)" />
-                </TouchableOpacity>
-            )}
             <PostcardCapture
                 imageUri={imageUri}
                 body={body}
-                fromName={fromName}
                 toName={toName}
-                fromAddress={currentUser?.address || ''}
                 toAddress={toAddress}
                 rectoRef={rectoRef}
                 versoRef={versoRef}
                 compositeRef={compositeRef}
+                locale={locale as 'en' | 'fr'}
             />
 
             {videoUri && player && (
@@ -543,6 +557,7 @@ export default function ComposeScreen() {
                                         justifyContent: 'center',
                                         alignItems: 'center',
                                         paddingHorizontal: 40,
+                                        paddingBottom: 70,
                                         pointerEvents: 'box-none',
                                         transform: [{ translateY: keyboardOffset }],
                                     }}
@@ -563,8 +578,6 @@ export default function ComposeScreen() {
                                                 onToNameChange={setToName}
                                                 toAddress={toAddress}
                                                 onToAddressChange={setToAddress}
-                                                fromName={fromName}
-                                                onFromNameChange={setFromName}
                                                 fromAddressUser={currentUser}
                                                 onSend={handleSend}
                                                 canSend={canSend}
@@ -573,7 +586,8 @@ export default function ComposeScreen() {
                                                 stampRotation={stampRotationRef.current}
                                                 stampOffsetX={stampOffsetXRef.current}
                                                 stampOffsetY={stampOffsetYRef.current}
-                                                onSharePostcard={handleSharePrompt}
+                                                isFlipped={isFlipped}
+                                                onFlip={() => setIsFlipped(f => !f)}
                                             />
                                             {sendError && <Text style={styles.errorText}>{sendError}</Text>}
                                         </Animated.View>
@@ -582,6 +596,97 @@ export default function ComposeScreen() {
                             </View>
                         )}
                     </Animated.View>
+                )}
+
+                {/* Compose action toolbar */}
+                {step === 'compose' && screenState === 'writing' && !!imageUri && (
+                    <View style={{
+                        position: 'absolute',
+                        bottom: insets.bottom + 49 + 8,
+                        left: 0,
+                        right: 0,
+                        paddingBottom: 0,
+                        paddingTop: 12,
+                        paddingHorizontal: 32,
+                        flexDirection: 'row',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                    }}>
+                        {/* TRASH — left */}
+                        <TouchableOpacity
+                            onPress={handleDiscard}
+                            style={{ padding: 10, opacity: hasContent ? 1 : 0 }}
+                            disabled={!hasContent}
+                        >
+                            <Ionicons name="trash-outline" size={22} color="rgba(250,249,246,0.6)" />
+                        </TouchableOpacity>
+
+                        {/* FLIP — center */}
+                        <TouchableOpacity
+                            onPress={() => setIsFlipped(f => !f)}
+                            style={{ padding: 10 }}
+                        >
+                            <Ionicons
+                                name="swap-horizontal-outline"
+                                size={24}
+                                color="rgba(250,249,246,0.8)"
+                            />
+                        </TouchableOpacity>
+
+                        {/* SEND or SHARE — right */}
+                        {isFlipped ? (
+                            toAddress.trim() ? (
+                                <TouchableOpacity
+                                    onPress={handleSend}
+                                    disabled={!canSend || isSending}
+                                    style={{
+                                        flexDirection: 'row',
+                                        alignItems: 'center',
+                                        padding: 10,
+                                    }}
+                                >
+                                    <Text style={{
+                                        fontFamily: 'Georgia',
+                                        fontSize: 14,
+                                        color: canSend ? Theme.colors.accent : 'rgba(250,249,246,0.25)',
+                                        marginRight: 6,
+                                    }}>
+                                        {t('compose.send')}
+                                    </Text>
+                                    <Ionicons
+                                        name="arrow-forward"
+                                        size={18}
+                                        color={canSend ? Theme.colors.accent : 'rgba(250,249,246,0.25)'}
+                                    />
+                                </TouchableOpacity>
+                            ) : (
+                                <TouchableOpacity
+                                    onPress={handleSharePrompt}
+                                    style={{
+                                        flexDirection: 'row',
+                                        alignItems: 'center',
+                                        padding: 10,
+                                    }}
+                                >
+                                    <Text style={{
+                                        fontFamily: 'Georgia',
+                                        fontSize: 14,
+                                        color: 'rgba(250,249,246,0.6)',
+                                        marginRight: 6,
+                                    }}>
+                                        {t('compose.noAddress')}
+                                    </Text>
+                                    <Ionicons
+                                        name="share-outline"
+                                        size={18}
+                                        color="rgba(250,249,246,0.6)"
+                                    />
+                                </TouchableOpacity>
+                            )
+                        ) : (
+                            <View style={{ padding: 10, width: 80 }} />
+                        )}
+                    </View>
                 )}
             </SafeAreaView>
         </View>

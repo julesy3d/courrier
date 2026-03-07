@@ -50,7 +50,12 @@ const en = {
     'compose.library': 'Choose from library',
     'compose.discard': 'Discard this postcard?',
     'compose.discardConfirm': 'Discard',
-    'compose.noAddress': "Send to someone who doesn't have an address yet",
+    'compose.noAddress': 'Share card',
+    'share.promptTitle': 'Send this postcard',
+    'share.promptMessage': 'How would you like to share this postcard?',
+    'share.iMessage': 'iMessage (3D)',
+    'share.otherMessenger': 'Other messenger',
+    'share.iMessageText': 'I sent you a postcard! Download Postal to reply.',
 
     // Letters Tab
     'letters.tab': 'Letters',
@@ -88,6 +93,7 @@ const en = {
     'letter.detail.from': 'From',
     'letter.detail.to': 'To',
     'letter.detail.notFound': 'Letter not found',
+    'letter.reply': 'Reply',
 };
 
 const fr = {
@@ -138,7 +144,12 @@ const fr = {
     'compose.library': 'Choisir dans la galerie',
     'compose.discard': 'Supprimer cette carte ?',
     'compose.discardConfirm': 'Supprimer',
-    'compose.noAddress': 'Envoyer à quelqu\'un qui n\'a pas encore d\'adresse',
+    'compose.noAddress': 'Partager la carte',
+    'share.promptTitle': 'Envoyer la carte',
+    'share.promptMessage': 'Comment veux-tu partager cette carte postale ?',
+    'share.iMessage': 'iMessage (3D)',
+    'share.otherMessenger': 'Autre messagerie',
+    'share.iMessageText': "Je t'ai envoyé une carte postale ! Télécharge Postal pour y répondre.",
 
     // Letters Tab
     'letters.tab': 'Lettres',
@@ -176,6 +187,7 @@ const fr = {
     'letter.detail.from': 'De',
     'letter.detail.to': 'À',
     'letter.detail.notFound': 'Lettre introuvable',
+    'letter.reply': 'Repondre',
 };
 
 const translations = { en, fr };

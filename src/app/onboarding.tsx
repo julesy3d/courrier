@@ -1,5 +1,6 @@
 import * as Haptics from 'expo-haptics';
-import React, { useState } from 'react';
+import * as Localization from 'expo-localization';
+import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import AddressBuilder, { ENGLISH_TYPES, FRENCH_TYPES } from '../components/AddressBuilder';
@@ -7,11 +8,19 @@ import { useTranslation } from '../lib/i18n';
 import { useStore } from '../lib/store';
 import { Theme } from '../theme';
 
+const detectedLanguage = (() => {
+    const deviceLocales = Localization.getLocales();
+    if (deviceLocales && deviceLocales.length > 0) {
+        if (deviceLocales[0].languageCode?.startsWith('fr')) return 'fr' as const;
+    }
+    return 'en' as const;
+})();
+
 export default function OnboardingScreen() {
-    const [language, setLanguage] = useState<'en' | 'fr'>('en');
+    const [language, setLanguage] = useState<'en' | 'fr'>(detectedLanguage);
     const [number, setNumber] = useState('');
     const [name, setName] = useState('');
-    const [selectedType, setSelectedType] = useState(ENGLISH_TYPES[0]);
+    const [selectedType, setSelectedType] = useState(detectedLanguage === 'fr' ? FRENCH_TYPES[0] : ENGLISH_TYPES[0]);
     const [selectedParticle, setSelectedParticle] = useState('de la');
 
     const [nameError, setNameError] = useState<string | null>(null);
@@ -20,6 +29,10 @@ export default function OnboardingScreen() {
 
     const { signInAnonymously, isAddressTaken, createUser, setLocaleOverride } = useStore();
     const { t } = useTranslation();
+
+    useEffect(() => {
+        setLocaleOverride(language);
+    }, []);
 
     const toggleLanguage = () => {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);

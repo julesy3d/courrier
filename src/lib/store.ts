@@ -36,6 +36,11 @@ export type AddressBookEntry = {
     created_at: string;
 };
 
+export type ComposePrefill = {
+    toName?: string;
+    toAddress?: string;
+} | null;
+
 interface AuthState {
     currentUser: AppUser | null;
     isLoading: boolean;
@@ -60,14 +65,21 @@ interface AuthState {
     fetchAddressBook: () => Promise<AddressBookEntry[]>;
     addAddressBookEntry: (name: string, address: string) => Promise<void>;
     deleteAddressBookEntry: (entryId: string) => Promise<void>;
+
+    composePrefill: ComposePrefill;
+    setComposePrefill: (prefill: ComposePrefill) => void;
+    clearComposePrefill: () => void;
 }
 
 export const useStore = create<AuthState>((set, get) => ({
     currentUser: null,
     isLoading: true,
     localeOverride: null,
+    composePrefill: null,
 
     setLocaleOverride: (lang) => set({ localeOverride: lang }),
+    setComposePrefill: (prefill) => set({ composePrefill: prefill }),
+    clearComposePrefill: () => set({ composePrefill: null }),
 
     signInAnonymously: async () => {
         try {
@@ -193,13 +205,11 @@ export const useStore = create<AuthState>((set, get) => ({
     },
 
     isAddressTaken: async (address: string) => {
-        const normalized = address.trim().replace(/,/g, '').toLowerCase();
-        const { data, error } = await supabase.from('users').select('address');
+        const { data, error } = await supabase.rpc('is_address_taken', {
+            check_address: address,
+        });
         if (error) throw error;
-
-        return (data || []).some(existing =>
-            existing.address.trim().replace(/,/g, '').toLowerCase() === normalized
-        );
+        return data === true;
     },
 
     // --- New Methods for Tab Data ---

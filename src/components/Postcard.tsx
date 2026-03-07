@@ -1,17 +1,32 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Dimensions, Easing, Image, ImageBackground, Keyboard, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Animated, Easing, Image, ImageBackground, Keyboard, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useTranslation } from '../lib/i18n';
+import {
+    CARD_HEIGHT,
+    CARD_WIDTH,
+    IMAGE_INSET,
+    STAMP_BOX_CENTER_X,
+    STAMP_BOX_CENTER_Y,
+    STAMP_HEIGHT,
+    STAMP_WIDTH,
+    TAMPON_HEIGHT,
+    TAMPON_WIDTH,
+    VERSO_CONTENT_LEFT,
+    VERSO_CONTENT_RIGHT,
+    VERSO_MESSAGE_BOTTOM,
+    VERSO_MESSAGE_TOP,
+    VERSO_RECIPIENT_ADDR_Y,
+    VERSO_RECIPIENT_NAME_Y,
+} from '../lib/postcardLayout';
 import { playFlip } from '../lib/sounds';
 import { AppUser, useStore } from '../lib/store';
 import { Theme } from '../theme';
 
-const { width: windowWidth } = Dimensions.get('window');
-const HORIZONTAL_PADDING = 40;
-const CARD_WIDTH = windowWidth - (HORIZONTAL_PADDING * 2);
-const CARD_ASPECT_RATIO = 297 / 422;
-const CARD_HEIGHT = CARD_WIDTH / CARD_ASPECT_RATIO;
+const rectoTexture = require('../assets/images/postcard_recto.webp');
+const versoTextureFr = require('../assets/images/postcard_verso_FR.webp');
+const versoTextureEng = require('../assets/images/postcard_verso_ENG.webp');
 
 /**
  * Simple seeded pseudo-random number generator.
@@ -32,17 +47,6 @@ function seededRandom(seed: string): () => number {
     };
 }
 
-// Stamp positioning — centered at 40px from right, 40px from top on 297×422 texture
-const STAMP_CENTER_X_RATIO = (297 - 40) / 297;  // 0.865 from left
-const STAMP_CENTER_Y_RATIO = 44 / 422;           // 0.1043 from top (nudged 4px down)
-const STAMP_WIDTH = CARD_WIDTH * 0.264;
-const STAMP_HEIGHT = STAMP_WIDTH * 1.25;          // Slightly taller than wide, like a real stamp
-
-// Postmark (tampon) sizing — asset is 280×120px, ~1/3 of stamp height
-const TAMPON_ASPECT = 280 / 120; // 2.33:1
-const TAMPON_HEIGHT = STAMP_HEIGHT * 0.74;
-const TAMPON_WIDTH = TAMPON_HEIGHT * TAMPON_ASPECT;
-
 type PostcardMode = 'compose' | 'view';
 
 export interface PostcardProps {
@@ -61,8 +65,7 @@ export interface PostcardProps {
     toAddress?: string;
     onToAddressChange?: (text: string) => void;
 
-    fromName?: string;
-    onFromNameChange?: (text: string) => void;
+    fromName?: string;              // Sender name (view mode only, from existing letters in database)
     fromAddressUser?: AppUser | null;
 
     viewToAddress?: string; // Override "To" in view mode (returned letters)
@@ -71,10 +74,11 @@ export interface PostcardProps {
     dateStr?: string;
 
     // Actions
+    isFlipped?: boolean;        // Controlled flip state from parent
+    onFlip?: () => void;        // Callback when flip is triggered
     onSend?: () => void;
     canSend?: boolean;
     isSending?: boolean;
-    onSharePostcard?: () => void;
 
     // Stamp animation (for send flow)
     stampAnim?: Animated.Value;      // Scale value 0→1, drives stamp appearance
@@ -92,22 +96,23 @@ export default function Postcard({
     body, onBodyChange,
     toName, onToNameChange,
     toAddress, onToAddressChange,
-    fromName, onFromNameChange,
+    fromName,
     fromAddressUser,
     viewToAddress,
     dateStr,
-    onSend, canSend = false, isSending = false, onSharePostcard,
+    onSend, canSend = false, isSending = false,
     stampAnim, stampRotation = 0, stampOffsetX = 0, stampOffsetY = 0,
     isDelivered = false,
     letterId,
+    isFlipped, onFlip,
 }: PostcardProps) {
-    const { t } = useTranslation();
+    const { t, locale } = useTranslation();
     const { currentUser } = useStore();
-    const [side, setSide] = useState<'recto' | 'verso'>('recto');
-    const [isFlipped, setIsFlipped] = useState(false);
-    const [toNameFocused, setToNameFocused] = useState(false);
-    const [toAddressFocused, setToAddressFocused] = useState(false);
+    const [internalFlipped, setInternalFlipped] = useState(false);
+    const flipped = isFlipped !== undefined ? isFlipped : internalFlipped;
     const flipAnim = useRef(new Animated.Value(0)).current;
+
+    const versoTexture = locale === 'fr' ? versoTextureFr : versoTextureEng;
 
     // Deterministic random placement for delivered letters
     const deliveredOffsets = useMemo(() => {
@@ -138,6 +143,38 @@ export default function Postcard({
         outputRange: ['180deg', '360deg'],
     });
 
+    const isFirstRender = useRef(true);
+
+    useEffect(() => {
+        if (isFirstRender.current) {
+            isFirstRender.current = false;
+            return;
+        }
+        if (flipped) {
+            // Flip to verso
+            if (mode === 'compose') Keyboard.dismiss();
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            playFlip();
+            Animated.timing(flipAnim, {
+                toValue: 1,
+                duration: 600,
+                useNativeDriver: true,
+                easing: Easing.inOut(Easing.ease),
+            }).start();
+        } else {
+            // Flip to recto
+            if (mode === 'compose') Keyboard.dismiss();
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            playFlip();
+            Animated.timing(flipAnim, {
+                toValue: 0,
+                duration: 600,
+                useNativeDriver: true,
+                easing: Easing.inOut(Easing.ease),
+            }).start();
+        }
+    }, [flipped, mode]);
+
     const viewFadeAnim = useRef(new Animated.Value(0)).current;
 
     useEffect(() => {
@@ -150,38 +187,16 @@ export default function Postcard({
         }
     }, [mode, viewFadeAnim]);
 
-    const flipToBack = () => {
-        if (mode === 'compose') Keyboard.dismiss();
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        playFlip();
-        Animated.timing(flipAnim, {
-            toValue: 1,
-            duration: 600,
-            useNativeDriver: true,
-            easing: Easing.inOut(Easing.ease),
-        }).start(() => {
-            setSide('verso');
-            setIsFlipped(true);
-        });
-    };
-
-    const flipToFront = () => {
-        if (mode === 'compose') Keyboard.dismiss();
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        playFlip();
-        Animated.timing(flipAnim, {
-            toValue: 0,
-            duration: 600,
-            useNativeDriver: true,
-            easing: Easing.inOut(Easing.ease),
-        }).start(() => {
-            setSide('recto');
-            setIsFlipped(false);
-        });
+    const handleTap = () => {
+        if (onFlip) {
+            onFlip();
+        } else {
+            setInternalFlipped(f => !f);
+        }
     };
 
     const isEditable = mode === 'compose';
-    const MAX_CHARS = 300;
+    const MAX_CHARS = 400;
     const canFlipToVerso = isEditable ? !!imageUri : true;
 
     return (
@@ -189,16 +204,23 @@ export default function Postcard({
             <View style={styles.cardContainer}>
                 {/* RECTO */}
                 <Animated.View
-                    pointerEvents={isFlipped ? 'none' : 'auto'}
+                    pointerEvents={flipped ? 'none' : 'auto'}
                     style={[
                         styles.cardLayer,
                         { transform: [{ rotateY: frontInterpolate }] }
                     ]}>
                     <ImageBackground
-                        source={require('../assets/images/lettreMAIN_rectoretouche1_0.png')}
+                        source={rectoTexture}
                         style={styles.cardBg}
                         resizeMode="cover"
                     >
+                        {mode === 'view' && (
+                            <TouchableOpacity
+                                activeOpacity={0.95}
+                                onPress={handleTap}
+                                style={StyleSheet.absoluteFillObject}
+                            />
+                        )}
                         {isEditable ? (
                             <TouchableOpacity
                                 style={styles.rectoImageContainer}
@@ -240,20 +262,34 @@ export default function Postcard({
 
                 {/* VERSO */}
                 <Animated.View
-                    pointerEvents={isFlipped ? 'auto' : 'none'}
+                    pointerEvents={flipped ? 'auto' : 'none'}
                     style={[
                         styles.cardLayer,
                         styles.cardVerso,
                         { transform: [{ rotateY: backInterpolate }] }
                     ]}>
                     <ImageBackground
-                        source={require('../assets/images/lettreMAIN_versoretouche1_1.png')}
+                        source={versoTexture}
                         style={styles.cardBg}
                         resizeMode="cover"
                     >
-                        <View style={styles.versoContentContainer}>
-                            {/* BODY TEXT ZONE — upper portion */}
-                            <View style={styles.versoBodyZone}>
+                        {mode === 'view' && (
+                            <TouchableOpacity
+                                activeOpacity={0.95}
+                                onPress={handleTap}
+                                style={StyleSheet.absoluteFillObject}
+                            />
+                        )}
+                        {/* VERSO content — overlaid on texture */}
+                        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
+                            {/* MESSAGE BODY — full width zone */}
+                            <View style={{
+                                position: 'absolute',
+                                top: CARD_HEIGHT * VERSO_MESSAGE_TOP,
+                                bottom: CARD_HEIGHT * (1 - VERSO_MESSAGE_BOTTOM),
+                                left: CARD_WIDTH * VERSO_CONTENT_LEFT,
+                                right: CARD_WIDTH * (1 - VERSO_CONTENT_RIGHT),
+                            }}>
                                 {isEditable ? (
                                     <TextInput
                                         style={styles.versoBodyInput}
@@ -274,99 +310,59 @@ export default function Postcard({
                                 {isEditable && (
                                     <Text style={[
                                         styles.charCount,
-                                        { color: body.length >= 280 ? Theme.colors.accent : Theme.colors.secondary }
+                                        { color: body.length >= 380 ? Theme.colors.accent : Theme.colors.secondary }
                                     ]}>
                                         {body.length}/{MAX_CHARS}
                                     </Text>
                                 )}
                             </View>
 
-                            {/* ADDRESS ZONE — lower portion */}
-                            <View style={styles.versoAddressZone}>
-                                <View style={styles.versoRow}>
-                                    {/* FROM HALF (Left) */}
-                                    <View style={styles.versoHalf}>
-                                        {!isEditable ? (
-                                            <View>
-                                                <Text style={styles.versoLabel}>{t('letter.detail.from')}</Text>
-                                                {fromName ? (
-                                                    <Text style={[styles.readOnlyText, { color: Theme.colors.text }]}>
-                                                        {fromName}
-                                                    </Text>
-                                                ) : null}
-                                                <Text style={[styles.readOnlyText, { color: Theme.colors.text, ...(fromName ? { fontSize: 11, marginTop: 2 } : {}) }]}>
-                                                    {fromAddressUser?.address || 'Unknown'}
-                                                </Text>
-                                            </View>
-                                        ) : (
-                                            <>
-                                                <Text style={styles.versoLabel}>{t('compose.from')}</Text>
-                                                <TextInput
-                                                    style={styles.versoInput}
-                                                    placeholder={t('compose.placeholderFromName')}
-                                                    placeholderTextColor={Theme.colors.secondary + '60'}
-                                                    value={fromName}
-                                                    onChangeText={onFromNameChange}
-                                                />
-                                                <Text style={styles.readOnlyText}>{fromAddressUser?.address || '—'}</Text>
-                                            </>
-                                        )}
-                                    </View>
+                            {/* RECIPIENT NAME — positioned on first dotted line */}
+                            <View style={{
+                                position: 'absolute',
+                                top: CARD_HEIGHT * VERSO_RECIPIENT_NAME_Y,
+                                left: CARD_WIDTH * VERSO_CONTENT_LEFT,
+                                right: CARD_WIDTH * (1 - VERSO_CONTENT_RIGHT),
+                                height: CARD_HEIGHT * 0.05,
+                            }}>
+                                {isEditable ? (
+                                    <TextInput
+                                        style={styles.versoRecipientInput}
+                                        placeholder={t('compose.placeholderToName')}
+                                        placeholderTextColor={Theme.colors.secondary + '60'}
+                                        value={toName}
+                                        onChangeText={onToNameChange}
+                                    />
+                                ) : (
+                                    <Text style={styles.versoRecipientText}>
+                                        {fromName ? `${fromName} — ` : ''}{fromAddressUser?.address || t('letters.unknownSender')}
+                                    </Text>
+                                )}
+                            </View>
 
-                                    <View style={{ width: 20 }} />
-
-                                    {/* TO HALF (Right) */}
-                                    <View style={[styles.versoHalf, styles.versoRightHalf]}>
-                                        {isEditable ? (
-                                            <>
-                                                <Text style={styles.versoLabel}>{t('compose.to')}</Text>
-                                                <TextInput
-                                                    style={styles.versoInput}
-                                                    placeholder={t('compose.placeholderToName')}
-                                                    placeholderTextColor={Theme.colors.secondary + '60'}
-                                                    value={toName}
-                                                    onChangeText={onToNameChange}
-                                                    onFocus={() => setToNameFocused(true)}
-                                                    onBlur={() => setToNameFocused(false)}
-                                                />
-                                                <TextInput
-                                                    style={[styles.versoInput, { marginTop: 12 }]}
-                                                    placeholder={t('compose.placeholderToAddress')}
-                                                    placeholderTextColor={Theme.colors.secondary + '60'}
-                                                    value={toAddress}
-                                                    onChangeText={onToAddressChange}
-                                                    autoCorrect={false}
-                                                    autoCapitalize="none"
-                                                    onFocus={() => setToAddressFocused(true)}
-                                                    onBlur={() => setToAddressFocused(false)}
-                                                />
-                                                {((toNameFocused && (!toName || !toName.trim())) || (toAddressFocused && (!toAddress || !toAddress.trim()))) && onSharePostcard && (
-                                                    <TouchableOpacity onPress={onSharePostcard} style={{ marginTop: 8 }}>
-                                                        <Text style={{
-                                                            fontSize: 12,
-                                                            color: Theme.colors.accent,
-                                                            fontStyle: 'italic',
-                                                        }}>
-                                                            {t('compose.noAddress')}
-                                                        </Text>
-                                                    </TouchableOpacity>
-                                                )}
-                                            </>
-                                        ) : (
-                                            <View>
-                                                <Text style={styles.versoLabel}>{t('letter.detail.to')}</Text>
-                                                {toName ? (
-                                                    <Text style={[styles.readOnlyText, { color: Theme.colors.text }]}>
-                                                        {toName}
-                                                    </Text>
-                                                ) : null}
-                                                <Text style={[styles.readOnlyText, { color: Theme.colors.text, ...(toName ? { fontSize: 11, marginTop: 2 } : {}) }]}>
-                                                    {viewToAddress || currentUser?.address || '—'}
-                                                </Text>
-                                            </View>
-                                        )}
-                                    </View>
-                                </View>
+                            {/* RECIPIENT ADDRESS — positioned on second dotted line */}
+                            <View style={{
+                                position: 'absolute',
+                                top: CARD_HEIGHT * VERSO_RECIPIENT_ADDR_Y,
+                                left: CARD_WIDTH * VERSO_CONTENT_LEFT,
+                                right: CARD_WIDTH * (1 - VERSO_CONTENT_RIGHT),
+                                height: CARD_HEIGHT * 0.05,
+                            }}>
+                                {isEditable ? (
+                                    <TextInput
+                                        style={styles.versoRecipientInput}
+                                        placeholder={t('compose.placeholderToAddress')}
+                                        placeholderTextColor={Theme.colors.secondary + '60'}
+                                        value={toAddress}
+                                        onChangeText={onToAddressChange}
+                                        autoCorrect={false}
+                                        autoCapitalize="none"
+                                    />
+                                ) : (
+                                    <Text style={styles.versoRecipientText}>
+                                        {viewToAddress || currentUser?.address || '—'}
+                                    </Text>
+                                )}
                             </View>
                         </View>
                         {/* STAMP — animated during send, static on delivered letters */}
@@ -374,9 +370,9 @@ export default function Postcard({
                             <Animated.View
                                 style={{
                                     position: 'absolute',
-                                    top: CARD_HEIGHT * STAMP_CENTER_Y_RATIO - STAMP_HEIGHT / 2
+                                    top: CARD_HEIGHT * STAMP_BOX_CENTER_Y - STAMP_HEIGHT / 2
                                         + (isDelivered ? deliveredOffsets.stampDy : stampOffsetY),
-                                    left: CARD_WIDTH * STAMP_CENTER_X_RATIO - STAMP_WIDTH / 2
+                                    left: CARD_WIDTH * STAMP_BOX_CENTER_X - STAMP_WIDTH / 2
                                         + (isDelivered ? deliveredOffsets.stampDx : stampOffsetX),
                                     width: STAMP_WIDTH,
                                     height: STAMP_HEIGHT,
@@ -404,7 +400,7 @@ export default function Postcard({
                                     top: Math.max(
                                         0,
                                         Math.min(
-                                            CARD_HEIGHT * STAMP_CENTER_Y_RATIO - TAMPON_HEIGHT / 2
+                                            CARD_HEIGHT * STAMP_BOX_CENTER_Y - TAMPON_HEIGHT / 2
                                             + deliveredOffsets.tamponDy,
                                             CARD_HEIGHT - TAMPON_HEIGHT
                                         )
@@ -412,7 +408,7 @@ export default function Postcard({
                                     left: Math.max(
                                         0,
                                         Math.min(
-                                            CARD_WIDTH * STAMP_CENTER_X_RATIO - TAMPON_WIDTH * 0.72
+                                            CARD_WIDTH * STAMP_BOX_CENTER_X - TAMPON_WIDTH * 0.72
                                             + deliveredOffsets.tamponDx,
                                             CARD_WIDTH - TAMPON_WIDTH
                                         )
@@ -434,49 +430,9 @@ export default function Postcard({
                     </ImageBackground>
                 </Animated.View>
             </View>
-
-            {/* FOOTER ACTIONS */}
-            <View style={[styles.footerContainer, { minHeight: 80, justifyContent: 'flex-end', opacity: isSending ? 0 : 1, pointerEvents: isSending ? 'none' : 'auto' }]}>
-                {side === 'recto' ? (
-                    <TouchableOpacity
-                        style={styles.actionButtonRight}
-                        onPress={flipToBack}
-                        disabled={!canFlipToVerso}
-                    >
-                        <Text style={[
-                            styles.actionTextRight,
-                            !canFlipToVerso && { color: Theme.colors.secondary }
-                        ]}>
-                            {t('compose.turnOver')}
-                        </Text>
-                    </TouchableOpacity>
-                ) : (
-                    <View style={styles.versoFooter}>
-                        {isEditable && (
-                            <Text style={styles.hintText}>{t('compose.addressHint')}</Text>
-                        )}
-                        <View style={styles.actionRow}>
-                            <TouchableOpacity onPress={flipToFront} style={styles.actionButtonLeft}>
-                                <Text style={styles.actionTextLeft}>{t('compose.turnBack')}</Text>
-                            </TouchableOpacity>
-
-                            {isEditable ? (
-                                <TouchableOpacity onPress={onSend} disabled={!canSend} style={styles.actionButtonRight}>
-                                    <Text style={[
-                                        styles.actionTextRight,
-                                        !canSend && { color: Theme.colors.secondary }
-                                    ]}>{t('compose.send')}</Text>
-                                </TouchableOpacity>
-                            ) : null}
-                        </View>
-                    </View>
-                )}
-            </View>
         </View>
     );
 }
-
-const IMAGE_INSET = 20; // Padding around the inset image on the recto
 
 const styles = StyleSheet.create({
     container: {
@@ -534,16 +490,6 @@ const styles = StyleSheet.create({
     },
 
     // === VERSO (body text + addresses) ===
-    versoContentContainer: {
-        flex: 1,
-        paddingTop: CARD_HEIGHT * 0.25, // Below "CARTE POSTALE" header + stamp + divider
-        paddingHorizontal: 20,
-        paddingBottom: 16,
-    },
-    versoBodyZone: {
-        flex: 1, // Takes available space above address zone
-        marginBottom: 12,
-    },
     versoBodyInput: {
         flex: 1,
         fontFamily: 'Georgia',
@@ -567,76 +513,16 @@ const styles = StyleSheet.create({
         fontSize: 11,
         fontFamily: Theme.fonts.body,
     },
-    versoAddressZone: {
-        height: CARD_HEIGHT * 0.35, // Fixed height for address area
-        borderTopWidth: StyleSheet.hairlineWidth,
-        borderTopColor: Theme.colors.secondary + '40',
-        paddingTop: 10,
-    },
-    versoRow: {
-        flexDirection: 'row',
-        flex: 1,
-    },
-    versoHalf: {
-        flex: 1,
-        paddingRight: 10,
-    },
-    versoRightHalf: {
-        paddingRight: 0,
-        paddingLeft: 10,
-    },
-    versoLabel: {
-        fontSize: 10,
-        textTransform: 'uppercase',
-        color: Theme.colors.secondary,
-        marginBottom: 6,
-    },
-    versoInput: {
+    versoRecipientInput: {
         fontFamily: 'Georgia',
-        fontSize: 13,
+        fontSize: 14,
         color: Theme.colors.text,
         padding: 0,
+        height: '100%',
     },
-    readOnlyText: {
+    versoRecipientText: {
         fontFamily: 'Georgia',
-        fontSize: 13,
-        color: Theme.colors.secondary,
-        marginTop: 6,
-        fontStyle: 'italic',
-    },
-
-    // === FOOTER ===
-    footerContainer: {
-        width: CARD_WIDTH,
-    },
-    actionTextRight: {
-        fontFamily: Theme.fonts.body,
-        fontSize: 16,
-        color: Theme.colors.accent,
-        textAlign: 'right',
-    },
-    versoFooter: {
-        width: '100%',
-    },
-    hintText: {
-        fontSize: 13,
-        color: Theme.colors.secondary,
-        textAlign: 'center',
-        marginBottom: 16,
-    },
-    actionRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-    },
-    actionButtonLeft: {
-        paddingVertical: 8,
-    },
-    actionButtonRight: {
-        paddingVertical: 8,
-    },
-    actionTextLeft: {
-        fontFamily: Theme.fonts.body,
-        fontSize: 16,
-        color: Theme.colors.secondary,
+        fontSize: 14,
+        color: Theme.colors.text,
     },
 });
