@@ -23,7 +23,7 @@ export const STAMP_BOX_CENTER_X = 0.851;
 export const STAMP_BOX_CENTER_Y = 0.116;
 
 // Stamp and postmark dimensions
-export const STAMP_WIDTH = CARD_WIDTH * 0.38;    // fits inside stamp box
+export const STAMP_WIDTH = CARD_WIDTH * 0.285;    // fits inside stamp box
 export const STAMP_HEIGHT = STAMP_WIDTH * 1.25;
 
 export const TAMPON_ASPECT = 280 / 120;

@@ -1,15 +1,202 @@
-import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import { Asset } from 'expo-asset';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useVideoPlayer, VideoView } from 'expo-video';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, AppState, Dimensions, Image, ImageBackground, StyleSheet, Text, View } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Reanimated, { interpolate, runOnJS, SharedValue, useAnimatedReaction, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import Postcard from '../../components/Postcard';
+import PostcardInspector from '../../components/PostcardInspector';
 import { useTranslation } from '../../lib/i18n';
 import { playReceive } from '../../lib/sounds';
 import { useStore } from '../../lib/store';
 import { Theme } from '../../theme';
+
+const { width: screenWidth } = Dimensions.get('window');
+const CARD_WIDTH = (screenWidth - 80) * 0.7;
+const CARD_HEIGHT = CARD_WIDTH / (297 / 422);
+const SNAP = 100;
+
+function seededRandom(seed: string): () => number {
+    let hash = 0;
+    for (let i = 0; i < seed.length; i++) {
+        const char = seed.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash |= 0;
+    }
+    return () => {
+        hash = (hash * 16807 + 0) % 2147483647;
+        if (hash < 0) hash += 2147483647;
+        return (hash - 1) / 2147483646;
+    };
+}
+
+function CardInPile({ letter, index, scrollY, totalCards, cardWidth, cardHeight }: {
+    letter: any;
+    index: number;
+    scrollY: SharedValue<number>;
+    totalCards: number;
+    cardWidth: number;
+    cardHeight: number;
+}) {
+    const { t } = useTranslation();
+    const rand = useMemo(() => {
+        const r = seededRandom(letter.id);
+        return {
+            rotation: (r() - 0.5) * (letter.opened_at === null && letter._type !== 'returned' ? 10 : 6),
+            offsetX: (r() - 0.5) * 10,
+            offsetY: (r() - 0.5) * 6,
+            sweepDir: r() > 0.5 ? 1 : -1,
+        };
+    }, [letter.id, letter.opened_at, letter._type]);
+
+    const animatedStyle = useAnimatedStyle(() => {
+        const N = totalCards;
+        const scrollPos = scrollY.value / SNAP;
+        const phase = ((scrollPos - index) % N + N * 100) % N;
+        const screenW = cardWidth + 80;
+
+        let scale = 1;
+        let translateX = 0;
+        let translateY = 0;
+        let opacity = 1;
+        let zIndex = 0;
+        let shadowBlur = 4;
+        let shadowOffset = 3;
+        let shadowOpacity = 0.1;
+
+        if (phase < 0.4) {
+            // Top → sweeping off
+            const t = phase / 0.4;
+            translateX = interpolate(t, [0, 1], [0, rand.sweepDir * screenW * 0.7]);
+            translateY = interpolate(t, [0, 1], [0, -30]);
+            scale = interpolate(t, [0, 1], [1.05, 0.9]);
+            opacity = interpolate(t, [0, 0.8, 1], [1, 1, 0]);
+            zIndex = Math.round(interpolate(phase, [0, 0.35, 0.4], [100, 90, 50]));
+            shadowBlur = interpolate(t, [0, 1], [20, 4]);
+            shadowOffset = interpolate(t, [0, 1], [14, 3]);
+            shadowOpacity = interpolate(t, [0, 1], [0.35, 0.08]);
+        } else if (phase < 0.6) {
+            // Off-screen
+            translateX = rand.sweepDir * screenW * 0.7;
+            translateY = -30;
+            scale = 0.9;
+            opacity = 0;
+            zIndex = 1;
+        } else if (phase < 1.0) {
+            // Sliding back under pile
+            const t = (phase - 0.6) / 0.4;
+            translateX = interpolate(t, [0, 1], [rand.sweepDir * screenW * 0.7, rand.offsetX]);
+            translateY = interpolate(t, [0, 1], [-30, rand.offsetY]);
+            scale = interpolate(t, [0, 1], [0.9, 0.86]);
+            opacity = interpolate(t, [0, 0.2, 1], [0, 1, 1]);
+            zIndex = 1;
+        } else if (phase < N - 0.5) {
+            // In pile
+            const pileT = (phase - 1) / (N - 1.5);
+            translateX = rand.offsetX;
+            translateY = rand.offsetY;
+            scale = interpolate(pileT, [0, 1], [0.86, 0.88]);
+            opacity = 1;
+            zIndex = Math.round(interpolate(pileT, [0, 1], [2, 30]));
+            shadowOpacity = interpolate(pileT, [0, 1], [0.08, 0.1]);
+        } else {
+            // Rising to top
+            const t = (phase - (N - 0.5)) / 0.5;
+            translateX = interpolate(t, [0, 1], [rand.offsetX, 0]);
+            translateY = interpolate(t, [0, 1], [rand.offsetY, 0]);
+            scale = interpolate(t, [0, 1], [0.88, 1.05]);
+            opacity = 1;
+            zIndex = Math.round(interpolate(t, [0, 1], [30, 100]));
+            shadowBlur = interpolate(t, [0, 1], [4, 20]);
+            shadowOffset = interpolate(t, [0, 1], [3, 14]);
+            shadowOpacity = interpolate(t, [0, 1], [0.1, 0.35]);
+        }
+
+        return {
+            opacity,
+            zIndex,
+            transform: [
+                { translateX },
+                { translateY },
+                { scale },
+                { rotateZ: `${rand.rotation}deg` },
+            ],
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: shadowOffset },
+            shadowOpacity,
+            shadowRadius: shadowBlur,
+            elevation: zIndex,
+        } as any;
+    }, [totalCards, index, rand, cardWidth]);
+
+    return (
+        <Reanimated.View style={[animatedStyle, { position: 'absolute', width: cardWidth, height: cardHeight }]}>
+            <View style={{
+                width: '100%',
+                height: '100%',
+                borderRadius: 4,
+                overflow: 'hidden',
+                backgroundColor: '#F5F0EB',
+            }}>
+                <ImageBackground
+                    source={require('../../assets/images/postcard_recto.webp')}
+                    style={{ width: '100%', height: '100%' }}
+                    resizeMode="cover"
+                >
+                    <View style={{ flex: 1, margin: 20, borderRadius: 4, overflow: 'hidden' }}>
+                        {letter.image_url ? (
+                            <Image
+                                source={{ uri: letter.image_url }}
+                                style={{ width: '100%', height: '100%' }}
+                                resizeMode="cover"
+                            />
+                        ) : (
+                            <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.04)' }} />
+                        )}
+                    </View>
+                </ImageBackground>
+            </View>
+
+            {letter.opened_at === null && letter._type !== 'returned' && (
+                <View style={{
+                    position: 'absolute',
+                    top: 12,
+                    left: 12,
+                    width: 10,
+                    height: 10,
+                    borderRadius: 5,
+                    backgroundColor: Theme.colors.accent,
+                }} />
+            )}
+
+            {letter._type === 'returned' && (
+                <View style={{
+                    position: 'absolute',
+                    top: 16,
+                    left: 16,
+                    backgroundColor: 'rgba(196,101,74,0.85)',
+                    paddingHorizontal: 8,
+                    paddingVertical: 4,
+                    borderRadius: 3,
+                    transform: [{ rotate: '-5deg' }],
+                }}>
+                    <Text style={{
+                        fontFamily: 'Georgia',
+                        fontSize: 10,
+                        color: '#FFFFFF',
+                        textTransform: 'uppercase',
+                        letterSpacing: 1,
+                    }}>
+                        {t('letters.returnedTitle')}
+                    </Text>
+                </View>
+            )}
+        </Reanimated.View>
+    );
+}
 
 export default function LettersScreen() {
     const { fetchReceivedLetters, fetchReturnedLetters, loadUserById, markLetterOpened, currentUser, setComposePrefill } = useStore();
@@ -17,24 +204,56 @@ export default function LettersScreen() {
     const [senderMap, setSenderMap] = useState<Record<string, string>>({});
     const [previousLetterIds, setPreviousLetterIds] = useState<Set<string>>(new Set());
     const [isLoading, setIsLoading] = useState(true);
-    const [refreshing, setRefreshing] = useState(false);
     const router = useRouter();
     const { t } = useTranslation();
     const insets = useSafeAreaInsets();
-    const tabBarHeight = 49 + insets.bottom; // Native tab bar height (49pt) + safe area
+    const tabBarHeight = 49 + insets.bottom;
 
     const [selectedLetter, setSelectedLetter] = useState<any>(null);
     const [senderAddress, setSenderAddress] = useState<string>('');
     const [viewFromName, setViewFromName] = useState<string>('');
     const [viewToName, setViewToName] = useState<string>('');
-    const postcardOpacity = useRef(new Animated.Value(0)).current;
+
+    const [videoUri, setVideoUri] = useState<string | null>(null);
+
+    useEffect(() => {
+        const loadVideo = async () => {
+            try {
+                const asset = Asset.fromModule(require('../../assets/video/LETTERS_background.mp4'));
+                await asset.downloadAsync();
+                setVideoUri(asset.localUri || asset.uri);
+            } catch (e) {
+                console.error('Failed to load video background', e);
+            }
+        };
+        loadVideo();
+    }, []);
+
+    const player = useVideoPlayer(videoUri, (player: any) => {
+        player.loop = true;
+        player.muted = true;
+        player.playbackRate = 0.25;
+        player.play();
+    });
+
+    useEffect(() => {
+        const sub = AppState.addEventListener('change', (state) => {
+            if (state === 'active' && player) player.play();
+        });
+        return () => sub.remove();
+    }, [player]);
+
+    const openLetterWrapper = (idx: number) => {
+        const letter = letters[idx];
+        if (!letter) return;
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        openLetter(letter);
+    };
 
     const openLetter = async (letter: any) => {
         setSelectedLetter(letter);
 
         if (letter._type === 'returned') {
-            // For returned letters, the current user IS the sender.
-            // "From" shows current user's address, "To" shows the failed recipient address.
             setSenderAddress(currentUser?.address || '—');
         } else {
             const sender = await loadUserById(letter.sender_id);
@@ -52,26 +271,13 @@ export default function LettersScreen() {
                     : l
             ));
         }
-
-        postcardOpacity.setValue(0);
-        Animated.timing(postcardOpacity, {
-            toValue: 1,
-            duration: 400,
-            useNativeDriver: true,
-        }).start();
     };
 
     const closeLetter = () => {
-        Animated.timing(postcardOpacity, {
-            toValue: 0,
-            duration: 300,
-            useNativeDriver: true,
-        }).start(() => {
-            setSelectedLetter(null);
-            setSenderAddress('');
-            setViewFromName('');
-            setViewToName('');
-        });
+        setSelectedLetter(null);
+        setSenderAddress('');
+        setViewFromName('');
+        setViewToName('');
     };
 
     const handleReply = () => {
@@ -83,21 +289,19 @@ export default function LettersScreen() {
 
         closeLetter();
 
-        // Small delay to let the close animation finish
         setTimeout(() => {
             router.navigate('/(tabs)/compose');
         }, 350);
     };
 
     const loadLetters = useCallback(async () => {
-        setIsLoading(true);
+        if (letters.length === 0) setIsLoading(true);
         try {
             const [received, returned] = await Promise.all([
                 fetchReceivedLetters(),
                 fetchReturnedLetters(),
             ]);
 
-            // Mark returned letters so we can style them differently
             const allLetters = [
                 ...received.map(l => ({ ...l, _type: 'received' as const })),
                 ...returned.map(l => ({ ...l, _type: 'returned' as const })),
@@ -105,7 +309,6 @@ export default function LettersScreen() {
                 new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime()
             );
 
-            // Resolve sender addresses for received letters
             const senderIds = [...new Set(received.map(l => l.sender_id))];
             const newSenderMap: Record<string, string> = {};
             for (const sid of senderIds) {
@@ -128,7 +331,7 @@ export default function LettersScreen() {
         } finally {
             setIsLoading(false);
         }
-    }, [fetchReceivedLetters, fetchReturnedLetters, loadUserById]);
+    }, [fetchReceivedLetters, fetchReturnedLetters, loadUserById, letters.length, previousLetterIds]);
 
     useFocusEffect(
         useCallback(() => {
@@ -136,231 +339,136 @@ export default function LettersScreen() {
         }, [loadLetters])
     );
 
-    const onRefresh = async () => {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-        setRefreshing(true);
-        await loadLetters();
-        setRefreshing(false);
-    };
+    const scrollY = useSharedValue(0);
+    const startScrollY = useSharedValue(0);
+    const tapStart = useSharedValue({ time: 0, y: 0 });
+    const [focusedIndex, setFocusedIndex] = useState(0);
 
-    const renderItem = ({ item }: { item: any }) => {
-        const isReturned = item._type === 'returned';
-        const isUnread = !isReturned && item.opened_at === null;
-        const date = new Date(isReturned ? item.returned_at : item.sent_at)
-            .toLocaleDateString();
+    useAnimatedReaction(
+        () => Math.round(scrollY.value / SNAP),
+        (idx) => {
+            if (letters.length === 0) return;
+            let wrappedIdx = idx % letters.length;
+            if (wrappedIdx < 0) wrappedIdx += letters.length;
+            runOnJS(setFocusedIndex)(wrappedIdx);
+        },
+        [letters.length]
+    );
 
-        if (isReturned) {
-            const preview = item.body.length > 40
-                ? item.body.substring(0, 40) + '…'
-                : item.body;
+    const tapGesture = Gesture.Tap()
+        .maxDuration(300)
+        .maxDistance(25)
+        .onEnd(() => {
+            if (letters.length > 0) {
+                const rawIdx = Math.round(scrollY.value / SNAP);
+                let wrappedIdx = rawIdx % letters.length;
+                if (wrappedIdx < 0) wrappedIdx += letters.length;
+                runOnJS(openLetterWrapper)(wrappedIdx);
+            }
+        });
 
-            return (
-                <TouchableOpacity
-                    style={[styles.row, { opacity: 0.7 }]}
-                    onPress={() => openLetter(item)}
-                >
-                    <View style={{ flex: 1, marginRight: 12 }}>
-                        <Text style={[styles.letterFrom, { color: Theme.colors.accent }]}>
-                            {t('letters.returnedTitle')}
-                        </Text>
-                        <Text style={styles.previewText} numberOfLines={1}>
-                            {t('letters.returnedTo')} {item.recipient_address}
-                        </Text>
-                    </View>
-                    <Text style={styles.dateText}>{date}</Text>
-                </TouchableOpacity>
-            );
-        }
+    const panGesture = Gesture.Pan()
+        .onStart((e) => {
+            startScrollY.value = scrollY.value;
+        })
+        .onUpdate((e) => {
+            if (letters.length <= 1) return;
+            scrollY.value = startScrollY.value - e.translationY;
+        })
+        .onEnd((e) => {
+            if (letters.length <= 1) return;
 
-        // Regular received letter (existing code)
-        const senderAddressItem = senderMap[item.sender_id] || t('letters.unknownSender');
-        const preview = item.body.length > 40
-            ? item.body.substring(0, 40) + '…'
-            : item.body;
+            const raw = scrollY.value + (e.velocityY * -1) * 0.006;
+            const idx = Math.round(raw / SNAP);
+            scrollY.value = withSpring(idx * SNAP, {
+                damping: 20,
+                stiffness: 150,
+                mass: 0.5,
+            });
+        });
 
-        return (
-            <TouchableOpacity
-                style={styles.row}
-                onPress={() => openLetter(item)}
-            >
-                <View style={{ flex: 1, marginRight: 12 }}>
-                    <View style={styles.rowContent}>
-                        {isUnread && <View style={styles.unreadDot} />}
-                        <Text
-                            style={[styles.letterFrom, {
-                                color: isUnread ? Theme.colors.text : Theme.colors.secondary,
-                                fontWeight: isUnread ? '600' : '400',
-                            }]}
-                            numberOfLines={1}
-                        >
-                            {senderAddressItem}
-                        </Text>
-                    </View>
-                    <Text style={styles.previewText} numberOfLines={1}>
-                        {preview}
-                    </Text>
-                </View>
-                <Text style={styles.dateText}>{date}</Text>
-            </TouchableOpacity>
-        );
-    };
-
-    if (isLoading) {
-        return (
-            <SafeAreaView edges={['top']} style={[styles.container, styles.centered]}>
-                <ActivityIndicator color={Theme.colors.accent} />
-            </SafeAreaView>
-        );
-    }
+    const composedGesture = Gesture.Exclusive(panGesture, tapGesture);
 
     return (
-        <SafeAreaView edges={['top']} style={styles.container}>
-
-            {letters.length === 0 ? (
-                <View style={styles.centered}>
-                    <Text style={[styles.emptyText, { textAlign: 'center', paddingHorizontal: 40 }]}>
-                        {t('letters.empty')}
-                    </Text>
-                </View>
-            ) : (
-                <FlatList
-                    data={letters}
-                    keyExtractor={item => item.id}
-                    renderItem={renderItem}
-                    refreshControl={
-                        <RefreshControl
-                            refreshing={refreshing}
-                            onRefresh={onRefresh}
-                            tintColor={Theme.colors.accent}
-                        />
-                    }
-                    contentContainerStyle={[styles.listContent, { paddingBottom: tabBarHeight + 20 }]}
+        <View style={{ flex: 1, backgroundColor: '#000' }}>
+            {videoUri && (
+                <VideoView
+                    player={player}
+                    style={StyleSheet.absoluteFillObject}
+                    contentFit="cover"
                 />
             )}
 
-            {selectedLetter && (
-                <Animated.View style={{
-                    ...StyleSheet.absoluteFillObject,
-                    opacity: postcardOpacity,
-                    backgroundColor: 'rgba(0, 0, 0, 0.4)',
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                    paddingHorizontal: 40,
-                    paddingBottom: tabBarHeight,
-                }}>
-                    <TouchableOpacity
-                        activeOpacity={1}
-                        style={StyleSheet.absoluteFillObject}
-                        onPress={closeLetter}
-                    />
-
-                    <View onStartShouldSetResponder={() => true}>
-                        <Postcard
-                            mode="view"
-                            imageUri={selectedLetter.image_url}
-                            body={selectedLetter.body}
-                            fromAddressUser={{ address: senderAddress } as any}
-                            fromName={viewFromName}
-                            toName={viewToName}
-                            viewToAddress={
-                                selectedLetter._type === 'returned'
-                                    ? selectedLetter.recipient_address
-                                    : undefined
-                            }
-                            isDelivered={true}
-                            letterId={selectedLetter.sent_at}
-                        />
+            <SafeAreaView edges={['top']} style={{ flex: 1 }}>
+                {isLoading ? (
+                    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                        <ActivityIndicator size="large" color="rgba(250,249,246,0.6)" />
+                    </View>
+                ) : letters.length === 0 ? (
+                    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
                         <Text style={{
                             fontFamily: 'Georgia',
-                            fontSize: 13,
-                            color: '#FAF9F6',
+                            fontSize: 16,
+                            color: 'rgba(250,249,246,0.6)',
                             textAlign: 'center',
-                            marginTop: 16,
+                            paddingHorizontal: 40,
                             textShadowColor: 'rgba(0,0,0,0.5)',
                             textShadowOffset: { width: 0, height: 1 },
                             textShadowRadius: 3,
                         }}>
-                            {new Date(selectedLetter.sent_at).toLocaleDateString(undefined, { dateStyle: 'full' })}
+                            {t('letters.empty')}
                         </Text>
-                        {selectedLetter._type !== 'returned' && (
-                            <TouchableOpacity
-                                onPress={handleReply}
-                                style={{
-                                    flexDirection: 'row',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    marginTop: 16,
-                                    padding: 10,
-                                }}
-                            >
-                                <Ionicons name="arrow-undo-outline" size={18} color="rgba(250,249,246,0.8)" />
-                                <Text style={{
-                                    fontFamily: 'Georgia',
-                                    fontSize: 13,
-                                    color: 'rgba(250,249,246,0.8)',
-                                    marginLeft: 8,
-                                    textShadowColor: 'rgba(0,0,0,0.5)',
-                                    textShadowOffset: { width: 0, height: 1 },
-                                    textShadowRadius: 3,
-                                }}>
-                                    {t('letter.reply')}
-                                </Text>
-                            </TouchableOpacity>
-                        )}
-
                     </View>
-                </Animated.View>
-            )}
-        </SafeAreaView>
+                ) : (
+                    <GestureDetector gesture={composedGesture}>
+                        <View style={{ flex: 1 }}>
+                            <Reanimated.View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', transform: [{ perspective: 8000 }, { rotateX: '20deg' }] }}>
+                                {letters.map((letter, index) => (
+                                    <CardInPile
+                                        key={letter.id}
+                                        letter={letter}
+                                        index={index}
+                                        scrollY={scrollY}
+                                        totalCards={letters.length}
+                                        cardWidth={CARD_WIDTH}
+                                        cardHeight={CARD_HEIGHT}
+                                    />
+                                ))}
+                            </Reanimated.View>
+                            <Text style={{
+                                position: 'absolute',
+                                top: insets.top + 8,
+                                alignSelf: 'center',
+                                fontFamily: 'Georgia',
+                                fontSize: 13,
+                                color: 'rgba(250,249,246,0.35)',
+                                textShadowColor: 'rgba(0,0,0,0.5)',
+                                textShadowOffset: { width: 0, height: 1 },
+                                textShadowRadius: 3,
+                            }}>
+                                {focusedIndex + 1} / {letters.length}
+                            </Text>
+                        </View>
+                    </GestureDetector>
+                )}
+
+                {selectedLetter && (
+                    <PostcardInspector
+                        letter={selectedLetter}
+                        senderAddress={senderAddress}
+                        fromName={viewFromName}
+                        toName={viewToName}
+                        isReturned={selectedLetter._type === 'returned'}
+                        recipientAddress={
+                            selectedLetter._type === 'returned'
+                                ? selectedLetter.recipient_address
+                                : undefined
+                        }
+                        onDismiss={closeLetter}
+                        onReply={handleReply}
+                    />
+                )}
+            </SafeAreaView>
+        </View>
     );
 }
-
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: Theme.colors.background,
-    },
-    centered: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    emptyText: {
-        fontSize: 13,
-        color: Theme.colors.secondary,
-    },
-    listContent: {
-        paddingVertical: 8,
-    },
-    row: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingVertical: 12,
-        paddingHorizontal: Theme.sizes.horizontalPadding,
-    },
-    rowContent: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    unreadDot: {
-        width: 8,
-        height: 8,
-        borderRadius: 4,
-        backgroundColor: Theme.colors.accent,
-        marginRight: 8,
-    },
-    letterFrom: {
-        fontSize: 16,
-    },
-    previewText: {
-        fontSize: 13,
-        color: Theme.colors.secondary,
-        marginTop: 2,
-        marginLeft: 16, // align with text after unread dot
-    },
-    dateText: {
-        fontSize: 13,
-        color: Theme.colors.secondary,
-    },
-});
