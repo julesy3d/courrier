@@ -1,9 +1,8 @@
-import { useFocusEffect } from '@react-navigation/native';
 import { Asset } from 'expo-asset';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, Dimensions, Image, ImageBackground, StyleSheet, Text, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Reanimated, { interpolate, runOnJS, SharedValue, useAnimatedReaction, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
@@ -190,11 +189,16 @@ function CardInPile({ letter, index, scrollY, totalCards, cardWidth, cardHeight 
 }
 
 export default function LettersScreen() {
-    const { fetchReceivedLetters, fetchReturnedLetters, loadUserById, markLetterOpened, currentUser, setComposePrefill } = useStore();
-    const [letters, setLetters] = useState<any[]>([]);
-    const [senderMap, setSenderMap] = useState<Record<string, string>>({});
-    const [previousLetterIds, setPreviousLetterIds] = useState<Set<string>>(new Set());
+    const { loadUserById, markLetterOpened, currentUser, setComposePrefill, cachedLetters: letters, cachedSenderMap: senderMap, syncLetters } = useStore();
     const [isLoading, setIsLoading] = useState(true);
+    const isMounted = useRef(true);
+
+    useEffect(() => {
+        return () => {
+            isMounted.current = false;
+        };
+    }, []);
+
     const router = useRouter();
     const { t } = useTranslation();
     const insets = useSafeAreaInsets();
@@ -229,10 +233,20 @@ export default function LettersScreen() {
 
     useEffect(() => {
         const sub = AppState.addEventListener('change', (state) => {
-            if (state === 'active' && player) player.play();
+            if (state === 'active') {
+                if (player) player.play();
+                syncLetters().then((newLetters) => {
+                    const newUnread = newLetters.filter((l: any) =>
+                        l._type === 'received' && l.opened_at === null
+                    );
+                    if (newUnread.length > 0 && isMounted.current) {
+                        playReceive();
+                    }
+                });
+            }
         });
         return () => sub.remove();
-    }, [player]);
+    }, [player, syncLetters]);
 
     const openLetterWrapper = (idx: number) => {
         const letter = letters[idx];
@@ -247,8 +261,12 @@ export default function LettersScreen() {
         if (letter._type === 'returned') {
             setSenderAddress(currentUser?.address || '—');
         } else {
-            const sender = await loadUserById(letter.sender_id);
-            setSenderAddress(sender?.address || t('letters.unknownSender'));
+            if (senderMap[letter.sender_id]) {
+                setSenderAddress(senderMap[letter.sender_id]);
+            } else {
+                const sender = await loadUserById(letter.sender_id);
+                setSenderAddress(sender?.address || t('letters.unknownSender'));
+            }
         }
 
         setViewFromName(letter.from_name || '');
@@ -256,11 +274,6 @@ export default function LettersScreen() {
 
         if (!letter.opened_at && letter._type !== 'returned') {
             markLetterOpened(letter.id).catch(console.error);
-            setLetters(prev => prev.map(l =>
-                l.id === letter.id
-                    ? { ...l, opened_at: new Date().toISOString() }
-                    : l
-            ));
         }
     };
 
@@ -285,50 +298,20 @@ export default function LettersScreen() {
         }, 350);
     };
 
-    const loadLetters = useCallback(async () => {
-        if (letters.length === 0) setIsLoading(true);
-        try {
-            const [received, returned] = await Promise.all([
-                fetchReceivedLetters(),
-                fetchReturnedLetters(),
-            ]);
-
-            const allLetters = [
-                ...received.map(l => ({ ...l, _type: 'received' as const })),
-                ...returned.map(l => ({ ...l, _type: 'returned' as const })),
-            ].sort((a, b) =>
-                new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime()
+    useEffect(() => {
+        syncLetters().then((newLetters) => {
+            const newUnread = newLetters.filter((l: any) =>
+                l._type === 'received' && l.opened_at === null
             );
-
-            const senderIds = [...new Set(received.map(l => l.sender_id))];
-            const newSenderMap: Record<string, string> = {};
-            for (const sid of senderIds) {
-                const user = await loadUserById(sid);
-                if (user) newSenderMap[sid] = user.address;
-            }
-
-            const newUnread = received.filter(l =>
-                l.opened_at === null && !previousLetterIds.has(l.id)
-            );
-            if (newUnread.length > 0) {
+            if (newUnread.length > 0 && isMounted.current) {
                 playReceive();
             }
-            setPreviousLetterIds(new Set(received.map(l => l.id)));
-
-            setSenderMap(newSenderMap);
-            setLetters(allLetters);
-        } catch (e) {
-            console.error(e);
-        } finally {
-            setIsLoading(false);
-        }
-    }, [fetchReceivedLetters, fetchReturnedLetters, loadUserById, letters.length, previousLetterIds]);
-
-    useFocusEffect(
-        useCallback(() => {
-            loadLetters();
-        }, [loadLetters])
-    );
+        }).finally(() => {
+            if (isMounted.current) {
+                setIsLoading(false);
+            }
+        });
+    }, []);
 
     const scrollY = useSharedValue(0);
     const startScrollY = useSharedValue(0);
