@@ -68,16 +68,16 @@ function CardInPile({ letter, index, scrollY, totalCards, cardWidth, cardHeight 
         let shadowOpacity = 0.1;
 
         if (phase < 0.4) {
-            // Top → sweeping off
+            // Sweeping off: pop up out of the pile, then fly away
             const t = phase / 0.4;
-            translateX = interpolate(t, [0, 1], [0, rand.sweepDir * screenW * 0.7]);
-            translateY = interpolate(t, [0, 1], [0, -30]);
-            scale = interpolate(t, [0, 1], [1.05, 0.9]);
+            translateX = interpolate(t, [0, 1], [rand.offsetX, rand.sweepDir * screenW * 0.7]);
+            translateY = interpolate(t, [0, 0.3, 1], [rand.offsetY, -50, -30]);
+            scale = interpolate(t, [0, 0.3, 1], [0.9, 1.05, 0.9]);
             opacity = interpolate(t, [0, 0.8, 1], [1, 1, 0]);
             zIndex = Math.round(interpolate(phase, [0, 0.35, 0.4], [100, 90, 50]));
-            shadowBlur = interpolate(t, [0, 1], [20, 4]);
-            shadowOffset = interpolate(t, [0, 1], [14, 3]);
-            shadowOpacity = interpolate(t, [0, 1], [0.35, 0.08]);
+            shadowBlur = interpolate(t, [0, 0.3, 1], [4, 20, 4]);
+            shadowOffset = interpolate(t, [0, 0.3, 1], [3, 14, 3]);
+            shadowOpacity = interpolate(t, [0, 0.3, 1], [0.1, 0.35, 0.08]);
         } else if (phase < 0.6) {
             // Off-screen
             translateX = rand.sweepDir * screenW * 0.7;
@@ -93,26 +93,17 @@ function CardInPile({ letter, index, scrollY, totalCards, cardWidth, cardHeight 
             scale = interpolate(t, [0, 1], [0.9, 0.86]);
             opacity = interpolate(t, [0, 0.2, 1], [0, 1, 1]);
             zIndex = 1;
-        } else if (phase < N - 0.5) {
-            // In pile
-            const pileT = (phase - 1) / (N - 1.5);
+        } else {
+            // In pile (phase 1.0 to N) - completely flat, progressing up the stack
+            const pileT = (phase - 1) / Math.max(1, N - 1);
             translateX = rand.offsetX;
             translateY = rand.offsetY;
-            scale = interpolate(pileT, [0, 1], [0.86, 0.88]);
+            scale = interpolate(pileT, [0, 1], [0.86, 0.9]);
             opacity = 1;
             zIndex = Math.round(interpolate(pileT, [0, 1], [2, 30]));
+            shadowBlur = 4;
+            shadowOffset = 3;
             shadowOpacity = interpolate(pileT, [0, 1], [0.08, 0.1]);
-        } else {
-            // Rising to top
-            const t = (phase - (N - 0.5)) / 0.5;
-            translateX = interpolate(t, [0, 1], [rand.offsetX, 0]);
-            translateY = interpolate(t, [0, 1], [rand.offsetY, 0]);
-            scale = interpolate(t, [0, 1], [0.88, 1.05]);
-            opacity = 1;
-            zIndex = Math.round(interpolate(t, [0, 1], [30, 100]));
-            shadowBlur = interpolate(t, [0, 1], [4, 20]);
-            shadowOffset = interpolate(t, [0, 1], [3, 14]);
-            shadowOpacity = interpolate(t, [0, 1], [0.1, 0.35]);
         }
 
         return {

@@ -138,8 +138,8 @@ export default function PostcardInspector({
     const stampImage = useImage(require('../assets/images/stamp.png'));
     const tamponImage = useImage(require('../assets/images/tampon.png'));
 
-    const font = useFont(require('../assets/fonts/LibreBaskerville-Regular.ttf'), 14);
-    const smallFont = useFont(require('../assets/fonts/LibreBaskerville-Regular.ttf'), 11);
+    const font = useFont(require('../assets/fonts/Georgia.ttf'), 14);
+    const smallFont = useFont(require('../assets/fonts/Georgia.ttf'), 11);
 
     // ── Deterministic stamp/postmark offsets (same as Postcard.tsx) ──
     const deliveredOffsets = useMemo(() => {
@@ -167,6 +167,8 @@ export default function PostcardInspector({
     // ── Shared values for gesture ───────────────────────────
     const tiltX = useSharedValue(5);   // resting tilt
     const tiltY = useSharedValue(0);
+    const startTiltX = useSharedValue(0);
+    const startTiltY = useSharedValue(0);
     const isFlipped = useSharedValue(false);
 
     // ── 3D transform (driven by tilt) ───────────────────────
@@ -203,11 +205,15 @@ export default function PostcardInspector({
         ];
     });
 
-    // ── Pan gesture ─────────────────────────────────────────
+    // ── Gestures ────────────────────────────────────────────
     const panGesture = Gesture.Pan()
+        .onStart(() => {
+            startTiltY.value = tiltY.value;
+            startTiltX.value = tiltX.value;
+        })
         .onUpdate((e) => {
-            tiltY.value = clamp(e.translationX * 0.3, -180, 180);
-            tiltX.value = clamp(e.translationY * -0.2, -30, 30);
+            tiltY.value = clamp(startTiltY.value + (e.translationX * 0.3), -180, 180);
+            tiltX.value = clamp(startTiltX.value + (e.translationY * -0.2), -30, 30);
         })
         .onEnd((e) => {
             const absY = Math.abs(tiltY.value);
@@ -239,6 +245,20 @@ export default function PostcardInspector({
                 stiffness: 200,
             });
         });
+
+    const tapGesture = Gesture.Tap()
+        .maxDuration(250)
+        .maxDistance(15)
+        .onEnd((e) => {
+            const isOutsideX = e.x < CANVAS_PADDING || e.x > CANVAS_PADDING + cardWidth;
+            const isOutsideY = e.y < CANVAS_PADDING || e.y > CANVAS_PADDING + cardHeight;
+
+            if (isOutsideX || isOutsideY) {
+                runOnJS(handleDismiss)();
+            }
+        });
+
+    const composedGesture = Gesture.Exclusive(panGesture, tapGesture);
 
     // ── Haptics: detect crossing ±90° ───────────────────────
     useAnimatedReaction(
@@ -298,7 +318,7 @@ export default function PostcardInspector({
             />
 
             {/* Card — Skia Canvas with gesture */}
-            <GestureDetector gesture={panGesture}>
+            <GestureDetector gesture={composedGesture}>
                 <View style={{
                     position: 'absolute',
                     top: cardTop - CANVAS_PADDING,
@@ -364,7 +384,7 @@ export default function PostcardInspector({
                                 {/* ── VERSO (message side — mirrored) ── */}
                                 <Group
                                     opacity={versoOpacity}
-                                    transform={[{ scaleX: -1 }]}
+                                    transform={[{ rotateY: Math.PI }]}
                                     origin={Skia.Point(cardWidth / 2, cardHeight / 2)}
                                 >
                                     {versoTexture && (
@@ -385,7 +405,7 @@ export default function PostcardInspector({
                                             y={cardHeight * VERSO_MESSAGE_TOP + 16 + i * 20}
                                             text={line}
                                             font={font}
-                                            color={Skia.Color('#1A1A1A')}
+                                            color="#1A1A1A"
                                         />
                                     ))}
 
@@ -396,7 +416,7 @@ export default function PostcardInspector({
                                             y={cardHeight * VERSO_RECIPIENT_NAME_Y + 14}
                                             text={senderLine}
                                             font={font}
-                                            color={Skia.Color('#1A1A1A')}
+                                            color="#1A1A1A"
                                         />
                                     )}
 
@@ -407,7 +427,7 @@ export default function PostcardInspector({
                                             y={cardHeight * VERSO_RECIPIENT_ADDR_Y + 14}
                                             text={addressLine}
                                             font={font}
-                                            color={Skia.Color('#1A1A1A')}
+                                            color="#1A1A1A"
                                         />
                                     )}
 
