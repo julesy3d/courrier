@@ -350,7 +350,9 @@ export default function ComposeScreen() {
             // Upload image if present
             let imageUrl: string | null = null;
             if (imageUri) {
-                imageUrl = await uploadPostcardImage(imageUri, currentUser!.id, supabase);
+                const { data: { session } } = await supabase.auth.getSession();
+                if (!session) throw new Error("No active session found for upload");
+                imageUrl = await uploadPostcardImage(imageUri, currentUser!.id, session.access_token);
             }
 
             await sendLetter(body.trim(), toAddress.trim(), imageUrl, null, toName.trim() || null);

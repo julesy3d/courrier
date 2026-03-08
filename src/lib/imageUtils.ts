@@ -1,14 +1,8 @@
-import { decode } from 'base64-arraybuffer';
 import * as Device from 'expo-device';
-import * as FileSystem from 'expo-file-system/legacy';
-import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import { Alert, Platform } from 'react-native';
 import { processPhoto } from './photoProcessor';
-
-// Target dimensions: match postcard aspect ratio (297:422), high-res for Skia processing
-const TARGET_WIDTH = 1200;
-const TARGET_HEIGHT = Math.round(TARGET_WIDTH * (422 / 297)); // ≈ 568
+import { SUPABASE_ANON_KEY, SUPABASE_URL } from './supabase';
 
 export type ImagePickSource = 'camera' | 'library';
 
@@ -18,7 +12,6 @@ export type ImagePickSource = 'camera' | 'library';
  * Returns the local URI of the compressed image, or null if cancelled.
  */
 export async function pickAndCompressImage(source: ImagePickSource): Promise<string | null> {
-    // Camera requires a physical device
     if (source === 'camera') {
         if (!Device.isDevice) {
             Alert.alert('Camera is not available on the simulator.');
@@ -31,9 +24,6 @@ export async function pickAndCompressImage(source: ImagePickSource): Promise<str
         }
     }
 
-    // Launch picker
-    // Note: aspect ratio only works on Android. On iOS, allowsEditing gives a square crop.
-    // We enforce the correct ratio via ImageManipulator afterward.
     const pickerOptions: ImagePicker.ImagePickerOptions = {
         mediaTypes: ['images'],
         allowsEditing: true,
@@ -50,68 +40,9 @@ export async function pickAndCompressImage(source: ImagePickSource): Promise<str
     }
 
     const asset = result.assets[0];
-    const pickedUri = asset.uri;
-    const pickedWidth = asset.width;
-    const pickedHeight = asset.height;
 
-    // Crop to postcard ratio (297:422) if the image isn't already that ratio.
-    // This handles iOS's square crop — we center-crop to portrait.
-    const targetRatio = 297 / 422; // ≈ 0.703 (portrait)
-    const currentRatio = pickedWidth / pickedHeight;
-
-    const context = ImageManipulator.manipulate(pickedUri);
-
-    if (Math.abs(currentRatio - targetRatio) > 0.02) {
-        // Need to crop
-        let cropWidth: number;
-        let cropHeight: number;
-        let cropX: number;
-        let cropY: number;
-
-        if (currentRatio > targetRatio) {
-            // Image is wider than target — crop sides
-            cropHeight = pickedHeight;
-            cropWidth = Math.round(pickedHeight * targetRatio);
-            cropX = Math.round((pickedWidth - cropWidth) / 2);
-            cropY = 0;
-        } else {
-            // Image is taller than target — crop top/bottom
-            cropWidth = pickedWidth;
-            cropHeight = Math.round(pickedWidth / targetRatio);
-            cropX = 0;
-            cropY = Math.round((pickedHeight - cropHeight) / 2);
-        }
-
-        context.crop({
-            originX: cropX,
-            originY: cropY,
-            width: cropWidth,
-            height: cropHeight,
-        });
-    }
-
-    // Resize to target dimensions
-    context.resize({ width: TARGET_WIDTH, height: TARGET_HEIGHT });
-
-    // Render intermediate high-quality image
-    const intermediate = await context.renderAsync();
-    const intermediateSave = await intermediate.saveAsync({
-        format: SaveFormat.JPEG,
-        compress: 0.95,
-    });
-
-    // Run custom Skia processing (warmth, vignette, grain)
-    const processedUri = await processPhoto(intermediateSave.uri);
-
-    // Second pass to compress specifically to WebP 0.5 (less aggressive since Skia adds grain)
-    const finalContext = ImageManipulator.manipulate(processedUri);
-    const finalRender = await finalContext.renderAsync();
-    const saved = await finalRender.saveAsync({
-        format: SaveFormat.WEBP,
-        compress: 0.5,
-    });
-
-    return saved.uri;
+    // Process image through Skia for crop, sizing, effects, and WebP compression
+    return await processPhoto(asset.uri);
 }
 
 /**
@@ -121,33 +52,34 @@ export async function pickAndCompressImage(source: ImagePickSource): Promise<str
 export async function uploadPostcardImage(
     localUri: string,
     userId: string,
-    supabase: any
+    sessionToken: string
 ): Promise<string> {
     const fileName = `${userId}/${Date.now()}.webp`;
 
-    // Read local file as base64
-    const base64 = await FileSystem.readAsStringAsync(localUri, {
-        encoding: 'base64',
-    });
+    const formData = new FormData();
+    formData.append('file', {
+        uri: localUri,
+        name: fileName,
+        type: 'image/webp',
+    } as any);
 
-    // Decode base64 to ArrayBuffer for upload
-    const arrayBuffer = decode(base64);
+    const response = await fetch(
+        `${SUPABASE_URL}/storage/v1/object/postcard-images/${fileName}`,
+        {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${sessionToken}`,
+                apikey: SUPABASE_ANON_KEY,
+            },
+            body: formData,
+        }
+    );
 
-    const { error: uploadError } = await supabase.storage
-        .from('postcard-images')
-        .upload(fileName, arrayBuffer, {
-            contentType: 'image/webp',
-            upsert: false,
-        });
-
-    if (uploadError) {
-        console.error('Image upload error:', uploadError);
-        throw uploadError;
+    if (!response.ok) {
+        const errText = await response.text();
+        console.error('Image upload error:', errText);
+        throw new Error(`Failed to upload image: ${response.status} ${errText}`);
     }
 
-    const { data } = supabase.storage
-        .from('postcard-images')
-        .getPublicUrl(fileName);
-
-    return data.publicUrl;
+    return `${SUPABASE_URL}/storage/v1/object/public/postcard-images/${fileName}`;
 }

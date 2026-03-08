@@ -1,4 +1,4 @@
-import { Skia } from '@shopify/react-native-skia';
+import { ImageFormat, Skia } from '@shopify/react-native-skia';
 import * as FileSystem from 'expo-file-system/legacy';
 
 // ---- SHADER SOURCE ----
@@ -65,69 +65,166 @@ const GRAIN_AMOUNT = 0.08;         // Subtle grain — visible on close look, no
 const VIGNETTE_STRENGTH = 0.35;    // Noticeable but not dramatic
 const WARMTH = 0.15;               // Warm but not orange
 
+const TARGET_WIDTH = 1200;
+const TARGET_HEIGHT = Math.round(TARGET_WIDTH * (422 / 297)); // ≈ 1704
+
 export async function processPhoto(inputUri: string): Promise<string> {
-    // Load the source image into Skia
-    const imageData = await FileSystem.readAsStringAsync(inputUri, {
-        encoding: FileSystem.EncodingType.Base64,
-    });
-    const skData = Skia.Data.fromBase64(imageData);
-    const skImage = Skia.Image.MakeImageFromEncoded(skData);
+    const disposables: { dispose(): void }[] = [];
 
-    if (!skImage) {
-        console.error('Failed to decode image for Skia processing');
-        // Fall back: return original image unprocessed
+    try {
+        // ---- DIRECTIVE 1: Bypass the JavaScript Heap for Image Loading ----
+        let skData;
+        if (typeof Skia.Data.fromURI !== 'function') {
+            // FALLBACK: This version of react-native-skia does not expose fromURI.
+            // Use the legacy Base64 path. This is a known memory hazard — leave the
+            // TODO comment so it is addressed when the dependency is upgraded.
+            // TODO: Upgrade @shopify/react-native-skia to a version supporting Skia.Data.fromURI
+            const b64 = await FileSystem.readAsStringAsync(inputUri, {
+                encoding: FileSystem.EncodingType.Base64,
+            });
+            skData = Skia.Data.fromBase64(b64);
+        } else {
+            skData = await Skia.Data.fromURI(inputUri);
+        }
+
+        if (skData && typeof (skData as any).dispose === 'function') {
+            disposables.push(skData as any);
+        }
+
+        const skImage = Skia.Image.MakeImageFromEncoded(skData);
+        if (!skImage) {
+            console.error('Failed to decode image for Skia processing');
+            return inputUri;
+        }
+        if (typeof skImage.dispose === 'function') {
+            disposables.push(skImage);
+        }
+
+        // ---- DIRECTIVE 3: Single GPU Pass with Affine Crop Matrix ----
+        const imgWidth = skImage.width();
+        const imgHeight = skImage.height();
+
+        // 1. Compute source crop rect (aspect-fill to 297:422 ratio)
+        const targetRatio = 297 / 422;
+        const currentRatio = imgWidth / imgHeight;
+        let srcX = 0, srcY = 0, srcW = imgWidth, srcH = imgHeight;
+
+        if (currentRatio > targetRatio) {
+            // Source is wider than target — crop sides, keep full height
+            srcW = imgHeight * targetRatio;
+            srcX = (imgWidth - srcW) / 2;
+        } else {
+            // Source is taller than target — crop top/bottom, keep full width
+            srcH = imgWidth / targetRatio;
+            srcY = (imgHeight - srcH) / 2;
+        }
+
+        // 2. Build the matrix that maps destination coords -> source crop coords
+        const cropMatrix = Skia.Matrix();
+        if (typeof cropMatrix.translate === 'function' && typeof cropMatrix.scale === 'function') {
+            cropMatrix.scale(TARGET_WIDTH / srcW, TARGET_HEIGHT / srcH);
+            cropMatrix.translate(-srcX, -srcY);
+        } else {
+            // Need to manually set translation and scale.
+            // Because Matrix exposes setting values, but the array layout is [scaleX, skewX, transX, skewY, scaleY, transY, pers0, pers1, pers2]
+            const sX = TARGET_WIDTH / srcW;
+            const sY = TARGET_HEIGHT / srcH;
+            (cropMatrix as any).set([sX, 0, -srcX * sX, 0, sY, -srcY * sY, 0, 0, 1]);
+        }
+        if (typeof (cropMatrix as any).dispose === 'function') {
+            disposables.push(cropMatrix as any);
+        }
+
+        // Create the runtime effect from the shader source
+        const effect = Skia.RuntimeEffect.Make(POSTAL_SHADER_SOURCE);
+        if (!effect) {
+            console.error('Failed to compile Skia shader');
+            return inputUri;
+        }
+        if (typeof effect.dispose === 'function') {
+            disposables.push(effect);
+        }
+
+        // Create a surface to render onto
+        const surface = Skia.Surface.MakeOffscreen(TARGET_WIDTH, TARGET_HEIGHT) || Skia.Surface.Make(TARGET_WIDTH, TARGET_HEIGHT);
+        if (!surface) {
+            console.error('Failed to create Skia offscreen surface');
+            return inputUri;
+        }
+        if (typeof surface.dispose === 'function') {
+            disposables.push(surface);
+        }
+
+        const canvas = surface.getCanvas();
+
+        // Create the shader with uniforms
+        const imageShader = skImage.makeShaderOptions(
+            0, // TileMode.Clamp
+            0, // TileMode.Clamp
+            1, // FilterMode.Linear
+            0, // MipmapMode.None
+            cropMatrix
+        );
+        if (imageShader && typeof imageShader.dispose === 'function') {
+            disposables.push(imageShader);
+        }
+
+        const shader = effect.makeShaderWithChildren(
+            [TARGET_WIDTH, TARGET_HEIGHT, GRAIN_AMOUNT, VIGNETTE_STRENGTH, WARMTH],
+            [imageShader]
+        );
+        if (shader && typeof shader.dispose === 'function') {
+            disposables.push(shader);
+        }
+
+        // Draw with the shader
+        const paint = Skia.Paint();
+        paint.setShader(shader);
+        if (typeof paint.dispose === 'function') {
+            disposables.push(paint);
+        }
+        canvas.drawRect(Skia.XYWHRect(0, 0, TARGET_WIDTH, TARGET_HEIGHT), paint);
+
+        surface.flush();
+
+        // Extract the processed image
+        const processedImage = surface.makeImageSnapshot();
+        if (processedImage && typeof processedImage.dispose === 'function') {
+            disposables.push(processedImage);
+        }
+
+        // ---- DIRECTIVE 5: Output Encoding Exception ----
+        let processedData;
+        let ext = 'webp';
+
+        if (ImageFormat && typeof ImageFormat.WEBP !== 'undefined') {
+            processedData = processedImage.encodeToBase64(ImageFormat.WEBP, 50);
+        } else {
+            processedData = processedImage.encodeToBase64();
+            ext = 'png';
+        }
+
+        // Write to a temp file
+        const outputPath = FileSystem.cacheDirectory + 'postal_processed_' + Date.now() + '.' + ext;
+        await FileSystem.writeAsStringAsync(outputPath, processedData, {
+            encoding: FileSystem.EncodingType.Base64,
+        });
+
+        return outputPath;
+
+    } catch (e) {
+        console.error('Error during Skia processing:', e);
         return inputUri;
+    } finally {
+        // ---- DIRECTIVE 2: Deterministic Destruction of Skia Host Objects ----
+        for (const obj of disposables) {
+            try {
+                if (typeof obj.dispose === 'function') {
+                    obj.dispose();
+                }
+            } catch (e) {
+                // Ignore errors during disposal
+            }
+        }
     }
-
-    const width = skImage.width();
-    const height = skImage.height();
-
-    // Create the runtime effect from the shader source
-    const effect = Skia.RuntimeEffect.Make(POSTAL_SHADER_SOURCE);
-    if (!effect) {
-        console.error('Failed to compile Skia shader');
-        return inputUri;
-    }
-
-    // Create a surface to render onto
-    const surface = Skia.Surface.MakeOffscreen(width, height) || Skia.Surface.Make(width, height);
-    if (!surface) {
-        console.error('Failed to create Skia offscreen surface');
-        return inputUri;
-    }
-
-    const canvas = surface.getCanvas();
-
-    // Create the shader with uniforms
-    const imageShader = skImage.makeShaderOptions(
-        0, // TileMode.Clamp
-        0, // TileMode.Clamp
-        1, // FilterMode.Linear
-        0, // MipmapMode.None
-        Skia.Matrix()
-    );
-
-    const shader = effect.makeShaderWithChildren(
-        [width, height, GRAIN_AMOUNT, VIGNETTE_STRENGTH, WARMTH],
-        [imageShader]
-    );
-
-    // Draw with the shader
-    const paint = Skia.Paint();
-    paint.setShader(shader);
-    canvas.drawRect(Skia.XYWHRect(0, 0, width, height), paint);
-
-    surface.flush();
-
-    // Extract the processed image
-    const processedImage = surface.makeImageSnapshot();
-    const processedData = processedImage.encodeToBase64();
-
-    // Write to a temp file
-    const outputPath = FileSystem.cacheDirectory + 'postal_processed_' + Date.now() + '.jpg';
-    await FileSystem.writeAsStringAsync(outputPath, processedData, {
-        encoding: FileSystem.EncodingType.Base64,
-    });
-
-    return outputPath;
 }
