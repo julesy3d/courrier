@@ -12,10 +12,18 @@ import {
     useImage
 } from '@shopify/react-native-skia';
 import * as Haptics from 'expo-haptics';
-import React, { useEffect, useMemo, useRef } from 'react';
-import { Animated, Dimensions, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useMemo } from 'react';
+import { Dimensions, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { runOnJS, useAnimatedReaction, useDerivedValue, useSharedValue, withSpring } from 'react-native-reanimated';
+import Reanimated, {
+    runOnJS,
+    useAnimatedReaction,
+    useAnimatedStyle,
+    useDerivedValue,
+    useSharedValue,
+    withSpring,
+    withTiming,
+} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from '../lib/i18n';
 import {
@@ -28,6 +36,7 @@ import {
     VERSO_RECIPIENT_ADDR_Y,
     VERSO_RECIPIENT_NAME_Y
 } from '../lib/postcardLayout';
+import { seededRandom } from '../lib/random';
 
 // ── Dimensions ──────────────────────────────────────────────
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
@@ -38,20 +47,6 @@ const INSPECTOR_CARD_HEIGHT = INSPECTOR_CARD_WIDTH / (297 / 422);
 function clamp(val: number, min: number, max: number) {
     'worklet';
     return Math.min(Math.max(val, min), max);
-}
-
-function seededRandom(seed: string): () => number {
-    let hash = 0;
-    for (let i = 0; i < seed.length; i++) {
-        const char = seed.charCodeAt(i);
-        hash = ((hash << 5) - hash) + char;
-        hash |= 0;
-    }
-    return () => {
-        hash = (hash * 16807 + 0) % 2147483647;
-        if (hash < 0) hash += 2147483647;
-        return (hash - 1) / 2147483646;
-    };
 }
 
 function wrapText(text: string, font: any, maxWidth: number): string[] {
@@ -72,6 +67,9 @@ function wrapText(text: string, font: any, maxWidth: number): string[] {
     if (currentLine) lines.push(currentLine);
     return lines;
 }
+
+const SHADOW_COLOR = Skia.Color('rgba(0,0,0,0.3)');
+const EDGE_COLOR = Skia.Color('#F5F0EB');
 
 // ── Props ───────────────────────────────────────────────────
 interface PostcardInspectorProps {
@@ -101,25 +99,19 @@ export default function PostcardInspector({
     const cardHeight = INSPECTOR_CARD_HEIGHT;
 
     // Fade IN/OUT animation
-    const overlayOpacity = useRef(new Animated.Value(0)).current;
+    const overlayOpacity = useSharedValue(0);
 
     useEffect(() => {
-        Animated.timing(overlayOpacity, {
-            toValue: 1,
-            duration: 250,
-            useNativeDriver: true,
-        }).start();
+        overlayOpacity.value = withTiming(1, { duration: 250 });
     }, []);
 
     const handleDismiss = () => {
-        Animated.timing(overlayOpacity, {
-            toValue: 0,
-            duration: 200,
-            useNativeDriver: true,
-        }).start(() => {
-            onDismiss();
+        overlayOpacity.value = withTiming(0, { duration: 200 }, (finished) => {
+            if (finished) runOnJS(onDismiss)();
         });
     };
+
+    const overlayStyle = useAnimatedStyle(() => ({ opacity: overlayOpacity.value }));
 
     const CANVAS_PADDING = 80;
     const canvasWidth = cardWidth + CANVAS_PADDING * 2;
@@ -131,9 +123,9 @@ export default function PostcardInspector({
 
     // ── Load Skia assets ────────────────────────────────────
     const rectoTexture = useImage(require('../assets/images/postcard_recto.webp'));
-    const versoTexture = locale === 'fr'
-        ? useImage(require('../assets/images/postcard_verso_FR.webp'))
-        : useImage(require('../assets/images/postcard_verso_ENG.webp'));
+    const versoTextureFR = useImage(require('../assets/images/postcard_verso_FR.webp'));
+    const versoTextureENG = useImage(require('../assets/images/postcard_verso_ENG.webp'));
+    const versoTexture = locale === 'fr' ? versoTextureFR : versoTextureENG;
     const photoImage = useImage(letter.image_url);
     const stampImage = useImage(require('../assets/images/stamp.png'));
     const tamponImage = useImage(require('../assets/images/tampon.png'));
@@ -193,8 +185,6 @@ export default function PostcardInspector({
     });
 
     // ── Shadow offsets ──────────────────────────────────────
-    const shadowOffsetX = useDerivedValue(() => tiltY.value * -0.3);
-    const shadowOffsetY = useDerivedValue(() => tiltX.value * 0.3 + 10);
     const shadowBlur = useDerivedValue(() => 12 + Math.abs(tiltX.value) * 0.2);
 
     // Shadow transform as a derived value
@@ -274,42 +264,39 @@ export default function PostcardInspector({
         }
     );
 
-    // ── Verso layout constants (in canvas pixels) ───────────
-    const versoContentLeft = cardWidth * VERSO_CONTENT_LEFT;
-    const versoMaxTextWidth = cardWidth * (VERSO_CONTENT_RIGHT - VERSO_CONTENT_LEFT) - 8;
 
-    // Stamp / postmark positions for verso
-    const stampW = cardWidth * 0.285;
-    const stampH = stampW * 1.25;
-    const stampX = cardWidth * STAMP_BOX_CENTER_X - stampW / 2 + deliveredOffsets.stampDx;
-    const stampY = cardHeight * STAMP_BOX_CENTER_Y - stampH / 2 + deliveredOffsets.stampDy;
+    const { versoContentLeft, stampW, stampH, stampX, stampY, tamponW, tamponH, tamponX, tamponY, senderLine, addressLine, dateString, bottomOffset } = useMemo(() => {
+        const versoContentLeft = cardWidth * VERSO_CONTENT_LEFT;
+        const stampW = cardWidth * 0.285;
+        const stampH = stampW * 1.25;
+        const stampX = cardWidth * STAMP_BOX_CENTER_X - stampW / 2 + deliveredOffsets.stampDx;
+        const stampY = cardHeight * STAMP_BOX_CENTER_Y - stampH / 2 + deliveredOffsets.stampDy;
+        const tamponAspect = 280 / 120;
+        const tamponH = stampH * 0.74;
+        const tamponW = tamponH * tamponAspect;
+        const tamponX = Math.max(0, Math.min(
+            cardWidth * STAMP_BOX_CENTER_X - tamponW * 0.72 + deliveredOffsets.tamponDx,
+            cardWidth - tamponW
+        ));
+        const tamponY = Math.max(0, Math.min(
+            cardHeight * STAMP_BOX_CENTER_Y - tamponH / 2 + deliveredOffsets.tamponDy,
+            cardHeight - tamponH
+        ));
+        const senderLine = fromName ? `${fromName} — ${senderAddress}` : senderAddress;
+        const addressLine = recipientAddress || senderAddress;
+        const dateString = letter.sent_at
+            ? new Date(letter.sent_at).toLocaleDateString(undefined, { dateStyle: 'full' } as any)
+            : '';
+        const bottomOffset = cardTop + cardHeight + 20;
 
-    const tamponAspect = 280 / 120;
-    const tamponH = stampH * 0.74;
-    const tamponW = tamponH * tamponAspect;
-    const tamponX = Math.max(0, Math.min(
-        cardWidth * STAMP_BOX_CENTER_X - tamponW * 0.72 + deliveredOffsets.tamponDx,
-        cardWidth - tamponW
-    ));
-    const tamponY = Math.max(0, Math.min(
-        cardHeight * STAMP_BOX_CENTER_Y - tamponH / 2 + deliveredOffsets.tamponDy,
-        cardHeight - tamponH
-    ));
+        return { versoContentLeft, stampW, stampH, stampX, stampY, tamponW, tamponH, tamponX, tamponY, senderLine, addressLine, dateString, bottomOffset };
+    }, [cardWidth, cardHeight, deliveredOffsets, fromName, senderAddress, recipientAddress, letter.sent_at, cardTop]);
 
-    // Sender line for verso
-    const senderLine = fromName ? `${fromName} — ${senderAddress}` : senderAddress;
-    const addressLine = recipientAddress || senderAddress;
-
-    // Date string
-    const dateString = letter.sent_at
-        ? new Date(letter.sent_at).toLocaleDateString(undefined, { dateStyle: 'full' } as any)
-        : '';
-
-    // Bottom offset for date/reply
-    const bottomOffset = cardTop + cardHeight + 20;
+    const cardOrigin = useMemo(() => Skia.Point(CANVAS_PADDING + cardWidth / 2, CANVAS_PADDING + cardHeight / 2), [cardWidth, cardHeight]);
+    const versoOrigin = useMemo(() => Skia.Point(cardWidth / 2, cardHeight / 2), [cardWidth, cardHeight]);
 
     return (
-        <Animated.View style={[StyleSheet.absoluteFillObject, { opacity: overlayOpacity }]} pointerEvents="box-none">
+        <Reanimated.View style={[StyleSheet.absoluteFillObject, overlayStyle]} pointerEvents="box-none">
             {/* Dark backdrop */}
             <TouchableOpacity
                 activeOpacity={1}
@@ -335,7 +322,7 @@ export default function PostcardInspector({
                                 width={cardWidth}
                                 height={cardHeight}
                                 r={4}
-                                color={Skia.Color('rgba(0,0,0,0.3)')}
+                                color={SHADOW_COLOR}
                             >
                                 <Blur blur={shadowBlur} />
                             </RoundedRect>
@@ -344,7 +331,7 @@ export default function PostcardInspector({
                         {/* ── Card with 3D transform ── */}
                         <Group
                             transform={cardTransform}
-                            origin={Skia.Point(CANVAS_PADDING + cardWidth / 2, CANVAS_PADDING + cardHeight / 2)}
+                            origin={cardOrigin}
                         >
                             <Group transform={[{ translateX: CANVAS_PADDING }, { translateY: CANVAS_PADDING }]}>
                                 {/* ── Edge reveal (thin cream strip near 90°) ── */}
@@ -354,7 +341,7 @@ export default function PostcardInspector({
                                         y={0}
                                         width={3}
                                         height={cardHeight}
-                                        color={Skia.Color('#F5F0EB')}
+                                        color={EDGE_COLOR}
                                         opacity={nearEdgeOpacity}
                                     />
                                 </Group>
@@ -385,7 +372,7 @@ export default function PostcardInspector({
                                 <Group
                                     opacity={versoOpacity}
                                     transform={[{ rotateY: Math.PI }]}
-                                    origin={Skia.Point(cardWidth / 2, cardHeight / 2)}
+                                    origin={versoOrigin}
                                 >
                                     {versoTexture && (
                                         <Image
@@ -398,7 +385,7 @@ export default function PostcardInspector({
                                     )}
 
                                     {/* Message body (wrapped) */}
-                                    {font && bodyLines.map((line, i) => (
+                                    {font && bodyLines.map((line: string, i: number) => (
                                         <SkiaText
                                             key={i}
                                             x={versoContentLeft}
@@ -508,6 +495,6 @@ export default function PostcardInspector({
                     </TouchableOpacity>
                 )}
             </View>
-        </Animated.View>
+        </Reanimated.View>
     );
 }

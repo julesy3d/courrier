@@ -9,6 +9,7 @@ import Reanimated, { interpolate, runOnJS, SharedValue, useAnimatedReaction, use
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import PostcardInspector from '../../components/PostcardInspector';
 import { useTranslation } from '../../lib/i18n';
+import { seededRandom } from '../../lib/random';
 import { playReceive } from '../../lib/sounds';
 import { useStore } from '../../lib/store';
 import { Theme } from '../../theme';
@@ -18,21 +19,7 @@ const CARD_WIDTH = (screenWidth - 80) * 0.7;
 const CARD_HEIGHT = CARD_WIDTH / (297 / 422);
 const SNAP = 100;
 
-function seededRandom(seed: string): () => number {
-    let hash = 0;
-    for (let i = 0; i < seed.length; i++) {
-        const char = seed.charCodeAt(i);
-        hash = ((hash << 5) - hash) + char;
-        hash |= 0;
-    }
-    return () => {
-        hash = (hash * 16807 + 0) % 2147483647;
-        if (hash < 0) hash += 2147483647;
-        return (hash - 1) / 2147483646;
-    };
-}
-
-function CardInPile({ letter, index, scrollY, totalCards, cardWidth, cardHeight }: {
+const CardInPile = React.memo(function CardInPile({ letter, index, scrollY, totalCards, cardWidth, cardHeight }: {
     letter: any;
     index: number;
     scrollY: SharedValue<number>;
@@ -186,7 +173,12 @@ function CardInPile({ letter, index, scrollY, totalCards, cardWidth, cardHeight 
             )}
         </Reanimated.View>
     );
-}
+}, (prev, next) => {
+    return prev.letter.id === next.letter.id
+        && prev.index === next.index
+        && prev.totalCards === next.totalCards
+        && prev.cardWidth === next.cardWidth;
+});
 
 export default function LettersScreen() {
     const { loadUserById, markLetterOpened, currentUser, setComposePrefill, cachedLetters: letters, cachedSenderMap: senderMap, syncLetters } = useStore();
@@ -363,6 +355,17 @@ export default function LettersScreen() {
 
     const composedGesture = Gesture.Exclusive(panGesture, tapGesture);
 
+    const RENDER_WINDOW = 6; // Easy to bump to 8 later if fast scrolling flashes
+    const visibleCards = useMemo(() => {
+        if (letters.length <= RENDER_WINDOW * 2) return letters.map((_, i) => i);
+        const indices: number[] = [];
+        for (let offset = -RENDER_WINDOW; offset <= RENDER_WINDOW; offset++) {
+            const idx = ((focusedIndex + offset) % letters.length + letters.length) % letters.length;
+            if (!indices.includes(idx)) indices.push(idx);
+        }
+        return indices;
+    }, [focusedIndex, letters.length]);
+
     return (
         <View style={{ flex: 1, backgroundColor: '#000' }}>
             {videoUri && (
@@ -397,10 +400,10 @@ export default function LettersScreen() {
                     <GestureDetector gesture={composedGesture}>
                         <View style={{ flex: 1 }}>
                             <Reanimated.View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', transform: [{ perspective: 8000 }, { rotateX: '20deg' }] }}>
-                                {letters.map((letter, index) => (
+                                {visibleCards.map((index) => (
                                     <CardInPile
-                                        key={letter.id}
-                                        letter={letter}
+                                        key={letters[index].id}
+                                        letter={letters[index]}
                                         index={index}
                                         scrollY={scrollY}
                                         totalCards={letters.length}
