@@ -17,7 +17,7 @@ import { Theme } from '../../theme';
 const { width: screenWidth } = Dimensions.get('window');
 const CARD_WIDTH = (screenWidth - 80) * 0.7;
 const CARD_HEIGHT = CARD_WIDTH / (297 / 422);
-const SNAP = 100;
+const SNAP = 260;
 
 const CardInPile = React.memo(function CardInPile({ letter, index, scrollY, totalCards, cardWidth, cardHeight }: {
     letter: any;
@@ -339,17 +339,18 @@ export default function LettersScreen() {
         })
         .onUpdate((e) => {
             if (letters.length <= 1) return;
-            scrollY.value = startScrollY.value - e.translationY;
+            scrollY.value = startScrollY.value - e.translationY * 0.55;
         })
         .onEnd((e) => {
             if (letters.length <= 1) return;
 
-            const raw = scrollY.value + (e.velocityY * -1) * 0.006;
-            const idx = Math.round(raw / SNAP);
+            // Project scroll position using velocity, dampened by friction
+            const projected = scrollY.value - (e.velocityY * 0.55) * 0.15;
+            const idx = Math.round(projected / SNAP);
             scrollY.value = withSpring(idx * SNAP, {
-                damping: 20,
-                stiffness: 150,
-                mass: 0.5,
+                damping: 260,
+                stiffness: 300,
+                mass: 4,
             });
         });
 
