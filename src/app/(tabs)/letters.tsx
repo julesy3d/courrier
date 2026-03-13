@@ -19,10 +19,12 @@ const CARD_WIDTH = (screenWidth - 80) * 0.7;
 const CARD_HEIGHT = CARD_WIDTH / (297 / 422);
 const SNAP = 260;
 
-const CardInPile = React.memo(function CardInPile({ letter, index, scrollY, totalCards, cardWidth, cardHeight }: {
+const CardInPile = React.memo(function CardInPile({ letter, index, scrollY, exitDirX, exitDirY, totalCards, cardWidth, cardHeight }: {
     letter: any;
     index: number;
     scrollY: SharedValue<number>;
+    exitDirX: SharedValue<number>;
+    exitDirY: SharedValue<number>;
     totalCards: number;
     cardWidth: number;
     cardHeight: number;
@@ -43,6 +45,17 @@ const CardInPile = React.memo(function CardInPile({ letter, index, scrollY, tota
         const scrollPos = scrollY.value / SNAP;
         const phase = ((scrollPos - index) % N + N * 100) % N;
         const screenW = cardWidth + 80;
+        const screenH = cardHeight + 200;
+
+        // Resolve exit direction: use gesture if available, fall back to seeded random
+        const isHorizontal = Math.abs(exitDirX.value) >= Math.abs(exitDirY.value)
+            || (exitDirX.value === 0 && exitDirY.value === 0);
+        const dirX = exitDirX.value !== 0 ? exitDirX.value : rand.sweepDir;
+        const dirY = exitDirY.value;
+
+        // Exit targets
+        const exitX = dirX * screenW * 0.7;
+        const exitY = dirY * screenH * 0.6;
 
         let scale = 1;
         let translateX = 0;
@@ -54,33 +67,50 @@ const CardInPile = React.memo(function CardInPile({ letter, index, scrollY, tota
         let shadowOpacity = 0.1;
 
         if (phase < 0.4) {
-            // Sweeping off: pop up out of the pile, then fly away
+            // Sweeping off: lift, then fly in swipe direction
             const t = phase / 0.4;
-            translateX = interpolate(t, [0, 1], [rand.offsetX, rand.sweepDir * screenW * 0.7]);
-            translateY = interpolate(t, [0, 0.3, 1], [rand.offsetY, -50, -30]);
+
+            if (isHorizontal) {
+                translateX = interpolate(t, [0, 1], [rand.offsetX, exitX]);
+                translateY = interpolate(t, [0, 0.3, 1], [rand.offsetY, rand.offsetY - 50, rand.offsetY - 30]);
+            } else {
+                translateX = interpolate(t, [0, 0.3, 1], [rand.offsetX, rand.offsetX + dirX * 10, rand.offsetX]);
+                translateY = interpolate(t, [0, 0.3, 1], [rand.offsetY, rand.offsetY - 30, exitY]);
+            }
+
             scale = interpolate(t, [0, 0.3, 1], [0.9, 1.05, 0.9]);
             opacity = interpolate(t, [0, 0.8, 1], [1, 1, 0]);
             zIndex = Math.round(interpolate(phase, [0, 0.35, 0.4], [100, 90, 50]));
             shadowBlur = interpolate(t, [0, 0.3, 1], [4, 20, 4]);
             shadowOffset = interpolate(t, [0, 0.3, 1], [3, 14, 3]);
             shadowOpacity = interpolate(t, [0, 0.3, 1], [0.1, 0.35, 0.08]);
+
         } else if (phase < 0.6) {
-            // Off-screen
-            translateX = rand.sweepDir * screenW * 0.7;
-            translateY = -30;
+            // Off-screen hold
+            translateX = isHorizontal ? exitX : rand.offsetX;
+            translateY = isHorizontal ? rand.offsetY - 30 : exitY;
             scale = 0.9;
             opacity = 0;
             zIndex = 1;
+
         } else if (phase < 1.0) {
-            // Sliding back under pile
+            // Sliding back under the pile
             const t = (phase - 0.6) / 0.4;
-            translateX = interpolate(t, [0, 1], [rand.sweepDir * screenW * 0.7, rand.offsetX]);
-            translateY = interpolate(t, [0, 1], [-30, rand.offsetY]);
+
+            if (isHorizontal) {
+                translateX = interpolate(t, [0, 1], [exitX, rand.offsetX]);
+                translateY = interpolate(t, [0, 1], [rand.offsetY - 30, rand.offsetY]);
+            } else {
+                translateX = interpolate(t, [0, 1], [rand.offsetX, rand.offsetX]);
+                translateY = interpolate(t, [0, 1], [exitY, rand.offsetY]);
+            }
+
             scale = interpolate(t, [0, 1], [0.9, 0.86]);
             opacity = interpolate(t, [0, 0.2, 1], [0, 1, 1]);
             zIndex = 1;
+
         } else {
-            // In pile (phase 1.0 to N) - completely flat, progressing up the stack
+            // In pile — unchanged
             const pileT = (phase - 1) / Math.max(1, N - 1);
             translateX = rand.offsetX;
             translateY = rand.offsetY;
@@ -308,6 +338,9 @@ export default function LettersScreen() {
     const scrollY = useSharedValue(0);
     const startScrollY = useSharedValue(0);
     const tapStart = useSharedValue({ time: 0, y: 0 });
+    const exitDirX = useSharedValue(0);
+    const exitDirY = useSharedValue(0);
+    const lockedAxis = useSharedValue(0); // 0 = unlocked, 1 = horizontal, 2 = vertical
     const [focusedIndex, setFocusedIndex] = useState(0);
 
     useAnimatedReaction(
@@ -333,20 +366,49 @@ export default function LettersScreen() {
             }
         });
 
+    const AXIS_LOCK_THRESHOLD = 12;
+
     const panGesture = Gesture.Pan()
-        .onStart((e) => {
+        .onStart(() => {
             startScrollY.value = scrollY.value;
+            lockedAxis.value = 0;
         })
         .onUpdate((e) => {
             if (letters.length <= 1) return;
-            scrollY.value = startScrollY.value - e.translationY * 0.55;
+
+            // Lock to dominant axis after threshold
+            if (lockedAxis.value === 0) {
+                const absX = Math.abs(e.translationX);
+                const absY = Math.abs(e.translationY);
+                if (absX > AXIS_LOCK_THRESHOLD || absY > AXIS_LOCK_THRESHOLD) {
+                    lockedAxis.value = absX > absY ? 1 : 2;
+                } else {
+                    return; // Below threshold, don't move yet
+                }
+            }
+
+            if (lockedAxis.value === 1) {
+                // Horizontal: swipe right = +1, swipe left = -1
+                scrollY.value = startScrollY.value + e.translationX * 0.55;
+                exitDirX.value = e.translationX > 0 ? 1 : -1;
+                exitDirY.value = 0;
+            } else {
+                // Vertical: swipe up = +1, swipe down = -1
+                scrollY.value = startScrollY.value - e.translationY * 0.55;
+                exitDirX.value = 0;
+                exitDirY.value = e.translationY < 0 ? -1 : 1;
+            }
         })
         .onEnd((e) => {
             if (letters.length <= 1) return;
 
-            // Project scroll position using velocity, dampened by friction
-            const projected = scrollY.value - (e.velocityY * 0.55) * 0.15;
+            // Project with velocity along the locked axis
+            const velocity = lockedAxis.value === 1
+                ? e.velocityX * 0.55
+                : -e.velocityY * 0.55;
+            const projected = scrollY.value + velocity * 0.15;
             const idx = Math.round(projected / SNAP);
+
             scrollY.value = withSpring(idx * SNAP, {
                 damping: 260,
                 stiffness: 300,
@@ -407,6 +469,8 @@ export default function LettersScreen() {
                                         letter={letters[index]}
                                         index={index}
                                         scrollY={scrollY}
+                                        exitDirX={exitDirX}
+                                        exitDirY={exitDirY}
                                         totalCards={letters.length}
                                         cardWidth={CARD_WIDTH}
                                         cardHeight={CARD_HEIGHT}
