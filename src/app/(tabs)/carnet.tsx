@@ -43,6 +43,18 @@ export default function AddressesScreen() {
     const [isLoading, setIsLoading] = useState(true);
 
     const sheetAnim = useRef(new Animated.Value(0)).current;
+    const hintOpacity = useRef(new Animated.Value(0)).current;
+
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            Animated.timing(hintOpacity, {
+                toValue: 1,
+                duration: 600,
+                useNativeDriver: true,
+            }).start();
+        }, 2500);
+        return () => clearTimeout(timer);
+    }, []);
 
     const sheetTranslateY = sheetAnim.interpolate({
         inputRange: [0, 1],
@@ -342,7 +354,7 @@ export default function AddressesScreen() {
                     }}>
                         {t('carnet.title')}
                     </Text>
-                    <Text style={{
+                    <Animated.Text style={{
                         fontFamily: 'Georgia',
                         fontSize: 16,
                         color: '#FAF9F6',
@@ -350,10 +362,10 @@ export default function AddressesScreen() {
                         textShadowColor: 'rgba(0,0,0,0.5)',
                         textShadowOffset: { width: 0, height: 1 },
                         textShadowRadius: 4,
-                        opacity: 0.7,
+                        opacity: hintOpacity,
                     }}>
                         {t('carnet.tapToOpen')}
-                    </Text>
+                    </Animated.Text>
                 </TouchableOpacity>
             </SafeAreaView>
 

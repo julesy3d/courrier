@@ -63,6 +63,23 @@ export default function ComposeScreen() {
     const [cardKey, setCardKey] = useState(0);
     const [screenState, setScreenState] = useState<'video' | 'writing'>('video');
     const postcardOpacity = useRef(new Animated.Value(0)).current;
+    const hintOpacity = useRef(new Animated.Value(0)).current;
+
+    useEffect(() => {
+        if (screenState === 'video') {
+            hintOpacity.setValue(0);
+            const timer = setTimeout(() => {
+                Animated.timing(hintOpacity, {
+                    toValue: 1,
+                    duration: 600,
+                    useNativeDriver: true,
+                }).start();
+            }, 2500);
+            return () => clearTimeout(timer);
+        } else {
+            hintOpacity.setValue(0);
+        }
+    }, [screenState]);
 
     useFocusEffect(
         useCallback(() => {
@@ -487,6 +504,18 @@ export default function ComposeScreen() {
                         }}>
                             {t('compose.coldOpen')}
                         </Text>
+                        <Animated.Text style={{
+                            fontFamily: 'Georgia',
+                            fontSize: 16,
+                            color: '#FAF9F6',
+                            marginTop: 40,
+                            textShadowColor: 'rgba(0,0,0,0.5)',
+                            textShadowOffset: { width: 0, height: 1 },
+                            textShadowRadius: 4,
+                            opacity: hintOpacity,
+                        }}>
+                            {t('compose.tapToWrite')}
+                        </Animated.Text>
                     </TouchableOpacity>
                 ) : (
                     <Animated.View style={{ flex: 1, opacity: postcardOpacity }}>
