@@ -40,7 +40,7 @@ const en = {
     'compose.placeholderToName': 'Their name',
     'compose.placeholderToAddress': '3, Flower Road',
     'compose.placeholderFromName': 'Your name',
-    'compose.tab': 'Write',
+
     'compose.coldOpen': 'Write a letter to someone you love.',
     'compose.tapToWrite': 'Tap to write',
     'compose.pickImage': 'Add a photo',
@@ -78,9 +78,12 @@ const en = {
     'carnet.save': 'Save',
     'carnet.delete': 'Delete',
     'carnet.deleteConfirm': 'Are you sure you want to remove {name} from your carnet?',
+    'carnet.discoveryEmpty': 'No new contacts found.',
 
     // Settings
     'settings.title': 'Settings',
+    'settings.name': 'Name',
+    'settings.language': 'Language',
     'settings.yourAddress': 'Your address',
     'settings.changeAddress': 'Change address',
     'settings.alert.title': 'Change your address?',
@@ -94,6 +97,22 @@ const en = {
     'letter.detail.to': 'To',
     'letter.detail.notFound': 'Letter not found',
     'letter.reply': 'Reply',
+    'letter.comments': 'Comments',
+
+    // Comments
+    'comments.empty': 'No comments yet. Be the first.',
+    'comments.placeholder': 'Write a comment...',
+    'comments.send': 'Send',
+
+    // First post
+    'firstPost.prompt': "Take a picture of what's in front of you.",
+    'firstPost.posting': 'Posting...',
+
+    // Capture / Preview
+    'capture.retake': 'Retake',
+    'capture.send': 'Send',
+    'capture.flipHint': 'Tap to flip',
+    'capture.posting': 'Posting...',
 };
 
 const fr = {
@@ -134,7 +153,7 @@ const fr = {
     'compose.placeholderToName': 'Son nom',
     'compose.placeholderToAddress': '3, Rue de la Fleur',
     'compose.placeholderFromName': 'Ton nom',
-    'compose.tab': 'Écrire',
+
     'compose.coldOpen': 'Écris à quelqu\'un que tu aimes.',
     'compose.tapToWrite': 'Touche pour écrire',
     'compose.pickImage': 'Ajouter une photo',
@@ -172,9 +191,12 @@ const fr = {
     'carnet.save': 'Enregistrer',
     'carnet.delete': 'Supprimer',
     'carnet.deleteConfirm': 'Tu veux vraiment retirer {name} de ton carnet ?',
+    'carnet.discoveryEmpty': 'Aucun nouveau contact trouvé.',
 
     // Settings
     'settings.title': 'Réglages',
+    'settings.name': 'Nom',
+    'settings.language': 'Langue',
     'settings.yourAddress': 'Ton adresse',
     'settings.changeAddress': "Changer d'adresse",
     'settings.alert.title': "Changer d'adresse ?",
@@ -188,6 +210,22 @@ const fr = {
     'letter.detail.to': 'À',
     'letter.detail.notFound': 'Lettre introuvable',
     'letter.reply': 'Repondre',
+    'letter.comments': 'Commentaires',
+
+    // Comments
+    'comments.empty': 'Pas encore de commentaires. Sois le premier.',
+    'comments.placeholder': 'Écris un commentaire...',
+    'comments.send': 'Envoyer',
+
+    // First post
+    'firstPost.prompt': 'Prends en photo ce qui est devant toi.',
+    'firstPost.posting': 'Envoi en cours...',
+
+    // Capture / Preview
+    'capture.retake': 'Reprendre',
+    'capture.send': 'Envoyer',
+    'capture.flipHint': 'Touche pour retourner',
+    'capture.posting': 'Envoi en cours...',
 };
 
 const translations = { en, fr };
@@ -203,8 +241,8 @@ export function useTranslation() {
     // 4. Fallback to 'en'
     let locale: SupportedLocale = 'en';
 
-    if (currentUser?.address_lang) {
-        locale = currentUser.address_lang as SupportedLocale;
+    if (currentUser?.lang) {
+        locale = currentUser.lang as SupportedLocale;
     } else if (localeOverride) {
         locale = localeOverride as SupportedLocale;
     } else {

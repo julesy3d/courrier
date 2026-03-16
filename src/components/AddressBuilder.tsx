@@ -274,7 +274,7 @@ const styles = StyleSheet.create({
         fontSize: 16,
     },
     modalDoneButton: {
-        color: Theme.colors.accent,
+        color: '#007AFF',
         fontSize: 16,
         fontWeight: '600',
     },
@@ -290,7 +290,7 @@ const styles = StyleSheet.create({
     },
     errorText: {
         fontSize: 13,
-        color: Theme.colors.accent,
+        color: '#007AFF',
         marginTop: 4,
     },
 });

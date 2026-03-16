@@ -1,26 +1,71 @@
-import { Asset } from 'expo-asset';
+import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
-import { useRouter } from 'expo-router';
-import { useVideoPlayer, VideoView } from 'expo-video';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, Dimensions, Image, ImageBackground, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, AppState, Dimensions, Image, ImageBackground, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Reanimated, { interpolate, runOnJS, SharedValue, useAnimatedReaction, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import PostcardInspector from '../../components/PostcardInspector';
+import DualCameraCapture from '../../components/DualCameraCapture';
 import { useTranslation } from '../../lib/i18n';
 import { seededRandom } from '../../lib/random';
 import { playReceive } from '../../lib/sounds';
 import { useStore } from '../../lib/store';
 import { Theme } from '../../theme';
 
-const { width: screenWidth } = Dimensions.get('window');
-const CARD_WIDTH = (screenWidth - 80) * 0.7;
+const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
+const CARD_WIDTH = screenWidth - 40;
 const CARD_HEIGHT = CARD_WIDTH / (297 / 422);
 const SNAP = 260;
 
-const CardInPile = React.memo(function CardInPile({ letter, index, scrollY, exitDirX, exitDirY, totalCards, cardWidth, cardHeight }: {
+// ── Grid Background ─────────────────────────────────────────
+const GRID_SIZE = 24;
+const GRID_COLOR = 'rgba(0,0,0,0.04)';
+const BG_COLOR = '#F5F2EE'; // warm off-white, like a desk surface
+
+function GridBackground() {
+    const verticalLines = Math.ceil(screenWidth / GRID_SIZE);
+    const horizontalLines = Math.ceil(screenHeight / GRID_SIZE);
+
+    return (
+        <View style={[StyleSheet.absoluteFillObject, { backgroundColor: BG_COLOR }]}>
+            {/* Vertical lines */}
+            {Array.from({ length: verticalLines + 1 }, (_, i) => (
+                <View
+                    key={`v${i}`}
+                    style={{
+                        position: 'absolute',
+                        left: i * GRID_SIZE,
+                        top: 0,
+                        bottom: 0,
+                        width: StyleSheet.hairlineWidth,
+                        backgroundColor: GRID_COLOR,
+                    }}
+                />
+            ))}
+            {/* Horizontal lines */}
+            {Array.from({ length: horizontalLines + 1 }, (_, i) => (
+                <View
+                    key={`h${i}`}
+                    style={{
+                        position: 'absolute',
+                        top: i * GRID_SIZE,
+                        left: 0,
+                        right: 0,
+                        height: StyleSheet.hairlineWidth,
+                        backgroundColor: GRID_COLOR,
+                    }}
+                />
+            ))}
+        </View>
+    );
+}
+
+const CardInPile = React.memo(function CardInPile({ letter, post, index, scrollY, exitDirX, exitDirY, totalCards, cardWidth, cardHeight }: {
     letter: any;
+    post: any;
     index: number;
     scrollY: SharedValue<number>;
     exitDirX: SharedValue<number>;
@@ -33,12 +78,12 @@ const CardInPile = React.memo(function CardInPile({ letter, index, scrollY, exit
     const rand = useMemo(() => {
         const r = seededRandom(letter.id);
         return {
-            rotation: (r() - 0.5) * (letter.opened_at === null && letter._type !== 'returned' ? 10 : 6),
+            rotation: (r() - 0.5) * (letter.opened_at === null ? 10 : 6),
             offsetX: (r() - 0.5) * 10,
             offsetY: (r() - 0.5) * 6,
             sweepDir: r() > 0.5 ? 1 : -1,
         };
-    }, [letter.id, letter.opened_at, letter._type]);
+    }, [letter.id, letter.opened_at]);
 
     const animatedStyle = useAnimatedStyle(() => {
         const N = totalCards;
@@ -154,9 +199,9 @@ const CardInPile = React.memo(function CardInPile({ letter, index, scrollY, exit
                     resizeMode="cover"
                 >
                     <View style={{ flex: 1, margin: 20, borderRadius: 4, overflow: 'hidden' }}>
-                        {letter.image_url ? (
+                        {post?.recto_url ? (
                             <Image
-                                source={{ uri: letter.image_url }}
+                                source={{ uri: post.recto_url }}
                                 style={{ width: '100%', height: '100%' }}
                                 resizeMode="cover"
                             />
@@ -167,7 +212,7 @@ const CardInPile = React.memo(function CardInPile({ letter, index, scrollY, exit
                 </ImageBackground>
             </View>
 
-            {letter.opened_at === null && letter._type !== 'returned' && (
+            {letter.opened_at === null && (
                 <View style={{
                     position: 'absolute',
                     top: 12,
@@ -175,43 +220,51 @@ const CardInPile = React.memo(function CardInPile({ letter, index, scrollY, exit
                     width: 10,
                     height: 10,
                     borderRadius: 5,
-                    backgroundColor: Theme.colors.accent,
+                    backgroundColor: '#007AFF',
                 }} />
             )}
 
-            {letter._type === 'returned' && (
-                <View style={{
-                    position: 'absolute',
-                    top: 16,
-                    left: 16,
-                    backgroundColor: 'rgba(196,101,74,0.85)',
-                    paddingHorizontal: 8,
-                    paddingVertical: 4,
-                    borderRadius: 3,
-                    transform: [{ rotate: '-5deg' }],
-                }}>
-                    <Text style={{
-                        fontFamily: 'Georgia',
-                        fontSize: 10,
-                        color: '#FFFFFF',
-                        textTransform: 'uppercase',
-                        letterSpacing: 1,
-                    }}>
-                        {t('letters.returnedTitle')}
-                    </Text>
-                </View>
-            )}
+
         </Reanimated.View>
     );
 }, (prev, next) => {
     return prev.letter.id === next.letter.id
+        && prev.post?.recto_url === next.post?.recto_url
         && prev.index === next.index
         && prev.totalCards === next.totalCards
         && prev.cardWidth === next.cardWidth;
 });
 
+function GlassButton({ onPress, icon, size = 40, style }: {
+    onPress: () => void;
+    icon: string;
+    size?: number;
+    style?: any;
+}) {
+    return (
+        <TouchableOpacity onPress={onPress} activeOpacity={0.7} style={style}>
+            <BlurView
+                intensity={40}
+                tint="light"
+                style={{
+                    width: size,
+                    height: size,
+                    borderRadius: size / 2,
+                    overflow: 'hidden',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    borderWidth: StyleSheet.hairlineWidth,
+                    borderColor: 'rgba(0,0,0,0.1)',
+                }}
+            >
+                <Ionicons name={icon as any} size={size * 0.5} color="rgba(0,0,0,0.5)" />
+            </BlurView>
+        </TouchableOpacity>
+    );
+}
+
 export default function LettersScreen() {
-    const { loadUserById, markLetterOpened, currentUser, setComposePrefill, cachedLetters: letters, cachedSenderMap: senderMap, syncLetters } = useStore();
+    const { markLetterOpened, currentUser, cachedLetters: letters, cachedSenderMap: senderMap, cachedPosts, getPostForLetter, syncLetters, syncCarnet } = useStore();
     const [isLoading, setIsLoading] = useState(true);
     const isMounted = useRef(true);
 
@@ -221,54 +274,32 @@ export default function LettersScreen() {
         };
     }, []);
 
-    const router = useRouter();
+
     const { t } = useTranslation();
     const insets = useSafeAreaInsets();
-    const tabBarHeight = 49 + insets.bottom;
+    const router = useRouter();
 
     const [selectedLetter, setSelectedLetter] = useState<any>(null);
-    const [senderAddress, setSenderAddress] = useState<string>('');
-    const [viewFromName, setViewFromName] = useState<string>('');
-    const [viewToName, setViewToName] = useState<string>('');
-
-    const [videoUri, setVideoUri] = useState<string | null>(null);
-
-    useEffect(() => {
-        const loadVideo = async () => {
-            try {
-                const asset = Asset.fromModule(require('../../assets/video/LETTERS_background.mp4'));
-                await asset.downloadAsync();
-                setVideoUri(asset.localUri || asset.uri);
-            } catch (e) {
-                console.error('Failed to load video background', e);
-            }
-        };
-        loadVideo();
-    }, []);
-
-    const player = useVideoPlayer(videoUri, (player: any) => {
-        player.loop = true;
-        player.muted = true;
-        player.playbackRate = 0.25;
-        player.play();
-    });
+    const [senderName, setSenderName] = useState<string>('');
+    const [showCamera, setShowCamera] = useState(false);
 
     useEffect(() => {
         const sub = AppState.addEventListener('change', (state) => {
             if (state === 'active') {
-                if (player) player.play();
                 syncLetters().then((newLetters) => {
-                    const newUnread = newLetters.filter((l: any) =>
-                        l._type === 'received' && l.opened_at === null
-                    );
+                    const newUnread = newLetters.filter((l: any) => l.opened_at === null);
                     if (newUnread.length > 0 && isMounted.current) {
                         playReceive();
+                    }
+                }).finally(() => {
+                    if (isMounted.current) {
+                        syncCarnet().catch(console.error);
                     }
                 });
             }
         });
         return () => sub.remove();
-    }, [player, syncLetters]);
+    }, [syncLetters, syncCarnet]);
 
     const openLetterWrapper = (idx: number) => {
         const letter = letters[idx];
@@ -280,58 +311,34 @@ export default function LettersScreen() {
     const openLetter = async (letter: any) => {
         setSelectedLetter(letter);
 
-        if (letter._type === 'returned') {
-            setSenderAddress(currentUser?.address || '—');
-        } else {
-            if (senderMap[letter.sender_id]) {
-                setSenderAddress(senderMap[letter.sender_id]);
-            } else {
-                const sender = await loadUserById(letter.sender_id);
-                setSenderAddress(sender?.address || t('letters.unknownSender'));
-            }
-        }
+        // Look up sender name from the cached map
+        const senderNameStr = senderMap[letter.sender_id] || t('letters.unknownSender');
+        setSenderName(senderNameStr);
 
-        setViewFromName(letter.from_name || '');
-        setViewToName(letter.to_name || '');
-
-        if (!letter.opened_at && letter._type !== 'returned') {
+        if (!letter.opened_at) {
             markLetterOpened(letter.id).catch(console.error);
         }
     };
 
     const closeLetter = () => {
         setSelectedLetter(null);
-        setSenderAddress('');
-        setViewFromName('');
-        setViewToName('');
+        setSenderName('');
     };
 
-    const handleReply = () => {
-        if (!senderAddress || senderAddress === t('letters.unknownSender')) return;
 
-        setComposePrefill({
-            toAddress: senderAddress,
-        });
-
-        closeLetter();
-
-        setTimeout(() => {
-            router.navigate('/(tabs)/compose');
-        }, 350);
-    };
 
     useEffect(() => {
         syncLetters().then((newLetters) => {
-            const newUnread = newLetters.filter((l: any) =>
-                l._type === 'received' && l.opened_at === null
-            );
+            const newUnread = newLetters.filter((l: any) => l.opened_at === null);
             if (newUnread.length > 0 && isMounted.current) {
                 playReceive();
             }
         }).finally(() => {
-            if (isMounted.current) {
-                setIsLoading(false);
-            }
+            syncCarnet().catch(console.error).finally(() => {
+                if (isMounted.current) {
+                    setIsLoading(false);
+                }
+            });
         });
     }, []);
 
@@ -357,8 +364,20 @@ export default function LettersScreen() {
     const tapGesture = Gesture.Tap()
         .maxDuration(300)
         .maxDistance(25)
-        .onEnd(() => {
-            if (letters.length > 0) {
+        .onEnd((e) => {
+            'worklet';
+            if (letters.length === 0) return;
+
+            // Hit-test: only trigger if tap is within the card area (approximately)
+            const centerX = screenWidth / 2;
+            const centerY = screenHeight / 2 - 40; // account for perspective offset
+            const halfW = CARD_WIDTH / 2 + 20;  // 20pt tolerance
+            const halfH = CARD_HEIGHT / 2 + 20;
+
+            const inBoundsX = e.absoluteX > centerX - halfW && e.absoluteX < centerX + halfW;
+            const inBoundsY = e.absoluteY > centerY - halfH && e.absoluteY < centerY + halfH;
+
+            if (inBoundsX && inBoundsY) {
                 const rawIdx = Math.round(scrollY.value / SNAP);
                 let wrappedIdx = rawIdx % letters.length;
                 if (wrappedIdx < 0) wrappedIdx += letters.length;
@@ -410,9 +429,9 @@ export default function LettersScreen() {
             const idx = Math.round(projected / SNAP);
 
             scrollY.value = withSpring(idx * SNAP, {
-                damping: 260,
-                stiffness: 300,
-                mass: 4,
+                damping: 40,
+                stiffness: 400,
+                mass: 1.2,
             });
         });
 
@@ -430,31 +449,21 @@ export default function LettersScreen() {
     }, [focusedIndex, letters.length]);
 
     return (
-        <View style={{ flex: 1, backgroundColor: '#000' }}>
-            {videoUri && (
-                <VideoView
-                    player={player}
-                    style={StyleSheet.absoluteFillObject}
-                    contentFit="cover"
-                />
-            )}
-
+        <View style={{ flex: 1, backgroundColor: BG_COLOR }}>
+            <GridBackground />
             <SafeAreaView edges={['top']} style={{ flex: 1 }}>
                 {isLoading ? (
                     <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                        <ActivityIndicator size="large" color="rgba(250,249,246,0.6)" />
+                        <ActivityIndicator size="large" color="rgba(0,0,0,0.25)" />
                     </View>
                 ) : letters.length === 0 ? (
                     <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
                         <Text style={{
-                            fontFamily: 'Georgia',
+                            fontFamily: 'Avenir Next',
                             fontSize: 16,
-                            color: 'rgba(250,249,246,0.6)',
+                            color: 'rgba(0,0,0,0.3)',
                             textAlign: 'center',
                             paddingHorizontal: 40,
-                            textShadowColor: 'rgba(0,0,0,0.5)',
-                            textShadowOffset: { width: 0, height: 1 },
-                            textShadowRadius: 3,
                         }}>
                             {t('letters.empty')}
                         </Text>
@@ -467,6 +476,7 @@ export default function LettersScreen() {
                                     <CardInPile
                                         key={letters[index].id}
                                         letter={letters[index]}
+                                        post={getPostForLetter(letters[index])}
                                         index={index}
                                         scrollY={scrollY}
                                         exitDirX={exitDirX}
@@ -481,12 +491,9 @@ export default function LettersScreen() {
                                 position: 'absolute',
                                 top: insets.top + 8,
                                 alignSelf: 'center',
-                                fontFamily: 'Georgia',
+                                fontFamily: 'Avenir Next',
                                 fontSize: 13,
-                                color: 'rgba(250,249,246,0.35)',
-                                textShadowColor: 'rgba(0,0,0,0.5)',
-                                textShadowOffset: { width: 0, height: 1 },
-                                textShadowRadius: 3,
+                                color: 'rgba(0,0,0,0.2)',
                             }}>
                                 {focusedIndex + 1} / {letters.length}
                             </Text>
@@ -494,23 +501,79 @@ export default function LettersScreen() {
                     </GestureDetector>
                 )}
 
+                {!selectedLetter && (
+                    <>
+                        <GlassButton
+                            icon="settings-outline"
+                            onPress={() => {
+                                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                                router.push('/(main)/settings' as any);
+                            }}
+                            style={{ position: 'absolute', top: insets.top + 12, left: 16 }}
+                        />
+
+                        <GlassButton
+                            icon="people-outline"
+                            onPress={() => {
+                                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                                router.push('/(main)/carnet' as any);
+                            }}
+                            style={{ position: 'absolute', top: insets.top + 12, right: 16 }}
+                        />
+
+                        <TouchableOpacity
+                            onPress={() => {
+                                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                                setShowCamera(true);
+                            }}
+                            activeOpacity={0.7}
+                            style={{
+                                position: 'absolute',
+                                bottom: insets.bottom + 20,
+                                alignSelf: 'center',
+                            }}
+                        >
+                            <BlurView
+                                intensity={50}
+                                tint="light"
+                                style={{
+                                    width: 64,
+                                    height: 64,
+                                    borderRadius: 32,
+                                    overflow: 'hidden',
+                                    justifyContent: 'center',
+                                    alignItems: 'center',
+                                    borderWidth: StyleSheet.hairlineWidth,
+                                    borderColor: 'rgba(0,0,0,0.1)',
+                                }}
+                            >
+                                <Ionicons name="add" size={32} color="rgba(0,0,0,0.5)" />
+                            </BlurView>
+                        </TouchableOpacity>
+                    </>
+                )}
+
                 {selectedLetter && (
                     <PostcardInspector
                         letter={selectedLetter}
-                        senderAddress={senderAddress}
-                        fromName={viewFromName}
-                        toName={viewToName}
-                        isReturned={selectedLetter._type === 'returned'}
-                        recipientAddress={
-                            selectedLetter._type === 'returned'
-                                ? selectedLetter.recipient_address
-                                : undefined
-                        }
+                        post={getPostForLetter(selectedLetter)}
+                        senderName={senderName}
                         onDismiss={closeLetter}
-                        onReply={handleReply}
                     />
                 )}
             </SafeAreaView>
+
+            {showCamera && (
+                <View style={StyleSheet.absoluteFill}>
+                    <DualCameraCapture
+                        onComplete={() => {
+                            setShowCamera(false);
+                            syncLetters().catch(console.error);
+                        }}
+                        onClose={() => setShowCamera(false)}
+                    />
+                </View>
+            )}
         </View>
     );
 }

@@ -4,103 +4,126 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import { registerForPushNotifications } from './notifications';
 import { supabase } from './supabase';
 
+// ═══════════════════════════════════════════════
+// TYPES
+// ═══════════════════════════════════════════════
+
 export type AppUser = {
     id: string;
     auth_id: string;
-    address: string;
-    address_lang: 'en' | 'fr';
-    created_at: string;
+    display_name: string;
+    phone_hash: string | null;
+    lang: 'en' | 'fr';
     push_token: string | null;
+    created_at: string;
+};
+
+export type Post = {
+    id: string;
+    sender_id: string;
+    recto_url: string;
+    selfie_url: string | null;
+    sent_at: string;
 };
 
 export type Letter = {
     id: string;
+    post_id: string;
     sender_id: string;
-    recipient_address: string;
-    recipient_id: string | null;
-    body: string;
-    signature: string | null;
-    image_url: string | null;
-    from_name: string | null;
-    to_name: string | null;
+    recipient_id: string;
     sent_at: string;
     opened_at: string | null;
-    delivers_at: string | null;
-    returned_at: string | null;
     notified: boolean;
 };
 
-export type AddressBookEntry = {
+export type Comment = {
     id: string;
-    owner_id: string;
-    name: string;
-    address: string;
+    post_id: string;
+    author_id: string;
+    body: string;
     created_at: string;
+    // Joined from users table when fetching
+    author_name?: string;
 };
 
-export type ComposePrefill = {
-    toName?: string;
-    toAddress?: string;
-} | null;
+export interface CarnetContact {
+    contactId: string;
+    muted: boolean;
+    addedAt: string;
+}
 
-interface AuthState {
+// ═══════════════════════════════════════════════
+// STORE INTERFACE
+// ═══════════════════════════════════════════════
+
+interface PostcardsStore {
+    // --- Auth ---
     currentUser: AppUser | null;
     isLoading: boolean;
-    isSyncing: boolean;
     signInAnonymously: () => Promise<void>;
     restoreSession: () => Promise<void>;
-    createUser: (address: string, lang: 'en' | 'fr') => Promise<void>;
+    createUser: (displayName: string, lang: 'en' | 'fr') => Promise<void>;
     loadCurrentUser: (authId: string) => Promise<void>;
-    updateAddress: (newAddress: string, lang: 'en' | 'fr') => Promise<void>;
     updateLanguage: (lang: 'en' | 'fr') => Promise<void>;
-    isAddressTaken: (address: string) => Promise<boolean>;
 
+    // --- Locale ---
     localeOverride: 'en' | 'fr' | null;
     setLocaleOverride: (lang: 'en' | 'fr' | null) => void;
 
-    cachedLetters: (Letter & { _type: 'received' | 'returned' })[];
+    // --- Letters + Posts ---
+    cachedLetters: Letter[];
+    cachedPosts: Record<string, Post>;
     cachedSenderMap: Record<string, string>;
-    syncLetters: () => Promise<any[]>;
-
-    // New Methods
-    fetchReceivedLetters: () => Promise<Letter[]>;
-    fetchSentLetters: () => Promise<Letter[]>;
-    fetchReturnedLetters: () => Promise<Letter[]>;
-    sendLetter: (body: string, recipientAddress: string, imageUrl: string | null, fromName: string | null, toName: string | null) => Promise<void>;
+    isSyncing: boolean;
+    syncLetters: () => Promise<Letter[]>;
     markLetterOpened: (letterId: string) => Promise<void>;
-    loadUserById: (userId: string) => Promise<AppUser | null>;
-    fetchAddressBook: () => Promise<AddressBookEntry[]>;
-    addAddressBookEntry: (name: string, address: string) => Promise<void>;
-    deleteAddressBookEntry: (entryId: string) => Promise<void>;
+    getPostForLetter: (letter: Letter) => Post | undefined;
 
-    composePrefill: ComposePrefill;
-    setComposePrefill: (prefill: ComposePrefill) => void;
-    clearComposePrefill: () => void;
+    // --- Carnet ---
+    carnet: CarnetContact[];
+    addContacts: (contactIds: string[]) => Promise<void>;
+    removeContact: (contactId: string) => Promise<void>;
+    toggleMute: (contactId: string) => Promise<void>;
+    syncCarnet: () => Promise<void>;
+    getActiveCarnetIds: () => string[];
+
+    // --- Broadcast ---
+    broadcastPostcard: (params: {
+        rectoUrl: string;
+        selfieUrl: string | null;
+    }) => Promise<string>;  // returns post_id
+
+    // --- Comments (not persisted) ---
+    fetchComments: (postId: string) => Promise<Comment[]>;
+    addComment: (postId: string, body: string) => Promise<Comment>;
+
+    // --- Onboarding ---
+    hasPostedFirst: boolean;
+    setHasPostedFirst: (value: boolean) => void;
 }
 
-export const useStore = create<AuthState>()(
+// ═══════════════════════════════════════════════
+// STORE IMPLEMENTATION
+// ═══════════════════════════════════════════════
+
+export const useStore = create<PostcardsStore>()(
     persist(
         (set, get) => ({
+            // --- State ---
             currentUser: null,
             isLoading: true,
-            isSyncing: false,
             localeOverride: null,
-            composePrefill: null,
             cachedLetters: [],
+            cachedPosts: {},
             cachedSenderMap: {},
+            isSyncing: false,
+            carnet: [],
+            hasPostedFirst: false,
 
-            setLocaleOverride: (lang) => set({ localeOverride: lang }),
-            setComposePrefill: (prefill) => set({ composePrefill: prefill }),
-            clearComposePrefill: () => set({ composePrefill: null }),
-
+            // --- Auth (unchanged) ---
             signInAnonymously: async () => {
-                try {
-                    const { error } = await supabase.auth.signInAnonymously();
-                    if (error) throw error;
-                } catch (e) {
-                    console.error('Error signing in anonymously', e);
-                    throw e;
-                }
+                const { error } = await supabase.auth.signInAnonymously();
+                if (error) throw error;
             },
 
             restoreSession: async () => {
@@ -108,7 +131,6 @@ export const useStore = create<AuthState>()(
                 try {
                     const { data: { session }, error } = await supabase.auth.getSession();
                     if (error) throw error;
-
                     if (session?.user) {
                         await get().loadCurrentUser(session.user.id);
                     } else {
@@ -129,187 +151,129 @@ export const useStore = create<AuthState>()(
                         .single();
 
                     if (error) {
-                        if (error.code !== 'PGRST116') {
-                            console.error('Error loading current user', error);
-                        }
+                        if (error.code !== 'PGRST116') console.error('Error loading user', error);
                         set({ currentUser: null, isLoading: false });
                     } else {
                         set({ currentUser: data as AppUser, isLoading: false });
-                        // Register push token (fire and forget)
                         registerForPushNotifications(data.id).catch(console.error);
                     }
                 } catch (e) {
-                    console.error('Exception loading current user', e);
+                    console.error('Exception loading user', e);
                     set({ currentUser: null, isLoading: false });
                 }
             },
 
-            createUser: async (address: string, lang: 'en' | 'fr') => {
-                try {
-                    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-                    if (sessionError || !session) throw new Error('No active auth session');
+            createUser: async (displayName: string, lang: 'en' | 'fr') => {
+                const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+                if (sessionError || !session) throw new Error('No active auth session');
 
-                    const newUser = {
+                const { data, error } = await supabase
+                    .from('users')
+                    .insert({
                         auth_id: session.user.id,
-                        address,
-                        address_lang: lang,
-                    };
+                        display_name: displayName,
+                        lang,
+                    })
+                    .select()
+                    .single();
 
-                    const { data, error } = await supabase
-                        .from('users')
-                        .insert(newUser)
-                        .select()
-                        .single();
-
-                    if (error) throw error;
-                    set({ currentUser: data as AppUser });
-                    // Register push token (fire and forget)
-                    registerForPushNotifications(data.id).catch(console.error);
-                } catch (e) {
-                    console.error('Error creating user', e);
-                    throw e;
-                }
-            },
-
-            updateAddress: async (newAddress: string, lang: 'en' | 'fr') => {
-                const { currentUser } = get();
-                if (!currentUser) return;
-                try {
-                    const { error } = await supabase
-                        .from('users')
-                        .update({ address: newAddress, address_lang: lang })
-                        .eq('id', currentUser.id);
-
-                    if (error) throw error;
-                    set({
-                        currentUser: {
-                            ...currentUser,
-                            address: newAddress,
-                            address_lang: lang,
-                        },
-                    });
-                } catch (e) {
-                    console.error('Error updating address', e);
-                    throw e;
-                }
+                if (error) throw error;
+                set({ currentUser: data as AppUser });
+                registerForPushNotifications(data.id).catch(console.error);
             },
 
             updateLanguage: async (lang: 'en' | 'fr') => {
                 const { currentUser } = get();
                 if (!currentUser) return;
-                try {
-                    const { error } = await supabase
-                        .from('users')
-                        .update({ address_lang: lang })
-                        .eq('id', currentUser.id);
-
-                    if (error) throw error;
-                    set({
-                        currentUser: {
-                            ...currentUser,
-                            address_lang: lang,
-                        },
-                    });
-                } catch (e) {
-                    console.error('Error updating language', e);
-                    throw e;
-                }
-            },
-
-            isAddressTaken: async (address: string) => {
-                const { data, error } = await supabase.rpc('is_address_taken', {
-                    check_address: address,
-                });
-                if (error) throw error;
-                return data === true;
-            },
-
-            // --- New Methods for Tab Data ---
-
-            fetchReceivedLetters: async () => {
-                const { currentUser } = get();
-                if (!currentUser) return [];
-
-                // TODO: server-side cron to clean up undelivered letters older than 30 days
-                const { data, error } = await supabase
-                    .from('letters')
-                    .select('*')
-                    .eq('recipient_id', currentUser.id)
-                    .lte('delivers_at', new Date().toISOString())
-                    .gte('sent_at', currentUser.created_at)
-                    .order('sent_at', { ascending: false });
-
-                if (error) {
-                    console.error('Error fetching received letters', error);
-                    throw error;
-                }
-                return data as Letter[];
-            },
-
-            fetchReturnedLetters: async () => {
-                const { currentUser } = get();
-                if (!currentUser) return [];
-
-                const { data, error } = await supabase
-                    .from('letters')
-                    .select('*')
-                    .eq('sender_id', currentUser.id)
-                    .not('returned_at', 'is', null)
-                    .order('returned_at', { ascending: false });
-
-                if (error) {
-                    console.error('Error fetching returned letters', error);
-                    throw error;
-                }
-                return data as Letter[];
-            },
-
-            fetchSentLetters: async () => {
-                const { currentUser } = get();
-                if (!currentUser) return [];
-
-                const { data, error } = await supabase
-                    .from('letters')
-                    .select('*')
-                    .eq('sender_id', currentUser.id)
-                    .order('sent_at', { ascending: false });
-
-                if (error) {
-                    console.error('Error fetching sent letters', error);
-                    throw error;
-                }
-                return data as Letter[];
-            },
-
-            sendLetter: async (body: string, recipientAddress: string, imageUrl: string | null, fromName: string | null, toName: string | null) => {
-                const { currentUser } = get();
-                if (!currentUser) throw new Error("No user");
-
-                const newLetter: any = {
-                    sender_id: currentUser.id,
-                    recipient_address: recipientAddress,
-                    body,
-                    signature: null,
-                };
-
-                if (imageUrl) {
-                    newLetter.image_url = imageUrl;
-                }
-
-                if (fromName && fromName.trim()) {
-                    newLetter.from_name = fromName.trim();
-                }
-                if (toName && toName.trim()) {
-                    newLetter.to_name = toName.trim();
-                }
 
                 const { error } = await supabase
-                    .from('letters')
-                    .insert(newLetter);
+                    .from('users')
+                    .update({ lang })
+                    .eq('id', currentUser.id);
 
-                if (error) {
-                    console.error("Error sending letter", error);
-                    throw error;
+                if (error) throw error;
+                set({ currentUser: { ...currentUser, lang } });
+            },
+
+            // --- Locale ---
+            setLocaleOverride: (lang) => set({ localeOverride: lang }),
+
+            // --- Letters + Posts ---
+            syncLetters: async () => {
+                if (get().isSyncing) return [];
+                set({ isSyncing: true });
+
+                const { currentUser, cachedLetters, cachedPosts, cachedSenderMap } = get();
+                if (!currentUser) {
+                    set({ isSyncing: false });
+                    return [];
+                }
+
+                try {
+                    // 1. High-water mark on sent_at
+                    const lastSentAt = cachedLetters.reduce((max, l) => {
+                        return l.sent_at > max ? l.sent_at : max;
+                    }, currentUser.created_at);
+
+                    // 2. Fetch new letters with their posts in one query
+                    const { data: rows, error } = await supabase
+                        .from('letters')
+                        .select('*, post:posts(*)')
+                        .eq('recipient_id', currentUser.id)
+                        .gt('sent_at', lastSentAt)
+                        .order('sent_at', { ascending: false });
+
+                    if (error) throw error;
+                    if (!rows || rows.length === 0) return [];
+
+                    // 3. Separate letters from posts
+                    const newPosts = { ...cachedPosts };
+                    const newLetters: Letter[] = rows.map((row: any) => {
+                        // Extract and cache the post
+                        if (row.post) {
+                            newPosts[row.post.id] = row.post as Post;
+                        }
+                        // Return the letter without the joined post
+                        const { post, ...letter } = row;
+                        return letter as Letter;
+                    });
+
+                    // 4. Fetch missing sender display names
+                    const senderMap = { ...cachedSenderMap };
+                    const newSenderIds = [...new Set(newLetters.map(l => l.sender_id))]
+                        .filter(id => !senderMap[id]);
+
+                    if (newSenderIds.length > 0) {
+                        const { data: senders } = await supabase
+                            .from('users')
+                            .select('id, display_name')
+                            .in('id', newSenderIds);
+
+                        if (senders) {
+                            senders.forEach((s: any) => { senderMap[s.id] = s.display_name; });
+                        }
+                    }
+
+                    // 5. Merge, deduplicate, sort
+                    const existingIds = new Set(cachedLetters.map(l => l.id));
+                    const trulyNew = newLetters.filter(l => !existingIds.has(l.id));
+
+                    const combined = [...trulyNew, ...cachedLetters]
+                        .sort((a, b) => new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime());
+
+                    // 6. Persist
+                    set({
+                        cachedLetters: combined,
+                        cachedPosts: newPosts,
+                        cachedSenderMap: senderMap,
+                    });
+
+                    return trulyNew;
+                } catch (e) {
+                    console.error('Error in delta sync', e);
+                    return [];
+                } finally {
+                    set({ isSyncing: false });
                 }
             },
 
@@ -319,184 +283,165 @@ export const useStore = create<AuthState>()(
                     .update({ opened_at: new Date().toISOString() })
                     .eq('id', letterId);
 
-                if (error) {
-                    console.error("Error marking letter opened", error);
-                    throw error;
-                }
+                if (error) throw error;
 
-                // Update local cache immediately
-                const { cachedLetters } = get();
                 set({
-                    cachedLetters: cachedLetters.map(l =>
+                    cachedLetters: get().cachedLetters.map(l =>
                         l.id === letterId ? { ...l, opened_at: new Date().toISOString() } : l
-                    )
+                    ),
                 });
             },
 
-            syncLetters: async () => {
-                if (get().isSyncing) return [];
-                set({ isSyncing: true });
-
-                const { currentUser, cachedLetters, cachedSenderMap } = get();
-                if (!currentUser) {
-                    set({ isSyncing: false });
-                    return [];
-                }
-
-                try {
-                    // 1. Find the highest delivery timestamps
-                    const receivedLetters = cachedLetters.filter(l => l._type === 'received');
-                    const returnedLetters = cachedLetters.filter(l => l._type === 'returned');
-
-                    const lastReceivedDate = receivedLetters.reduce((max, l) => {
-                        if (!l.delivers_at) return max;
-                        return l.delivers_at > max ? l.delivers_at : max;
-                    }, currentUser.created_at);
-
-                    const lastReturnedDate = returnedLetters.reduce((max, l) => {
-                        if (!l.returned_at) return max;
-                        return l.returned_at > max ? l.returned_at : max;
-                    }, currentUser.created_at); // Symmetric fallback
-
-                    // 2. Fetch ONLY new letters (Delta Sync)
-                    const [newReceivedResult, newReturnedResult] = await Promise.all([
-                        supabase
-                            .from('letters')
-                            .select('*')
-                            .eq('recipient_id', currentUser.id)
-                            .lte('delivers_at', new Date().toISOString())
-                            .gt('delivers_at', lastReceivedDate)
-                            .order('delivers_at', { ascending: false }),
-                        supabase
-                            .from('letters')
-                            .select('*')
-                            .eq('sender_id', currentUser.id)
-                            .not('returned_at', 'is', null)
-                            .gt('returned_at', lastReturnedDate)
-                            .order('returned_at', { ascending: false }),
-                    ]);
-
-                    if (newReceivedResult.error) throw newReceivedResult.error;
-                    if (newReturnedResult.error) throw newReturnedResult.error;
-
-                    const newReceived = (newReceivedResult.data || []) as Letter[];
-                    const newReturned = (newReturnedResult.data || []) as Letter[];
-
-                    if (newReceived.length === 0 && newReturned.length === 0) {
-                        return []; // Cache is perfectly up to date
-                    }
-
-                    const taggedNewLetters = [
-                        ...newReceived.map(l => ({ ...l, _type: 'received' as const })),
-                        ...newReturned.map(l => ({ ...l, _type: 'returned' as const })),
-                    ];
-
-                    // 3. Batch Fetch Missing Senders (Fixes N+1 issue)
-                    const existingMap = { ...cachedSenderMap };
-                    const newSenderIds = [...new Set(newReceived.map(l => l.sender_id))]
-                        .filter(id => !existingMap[id]);
-
-                    if (newSenderIds.length > 0) {
-                        const { data: senders } = await supabase
-                            .from('users')
-                            .select('id, address')
-                            .in('id', newSenderIds);
-
-                        if (senders) {
-                            senders.forEach((s: any) => { existingMap[s.id] = s.address; });
-                        }
-                    }
-
-                    // 4. Merge new letters with cache and sort by sent_at
-                    const freshCache = get().cachedLetters;
-                    const existingIds = new Set(freshCache.map(l => l.id));
-                    const trulyNewLetters = taggedNewLetters.filter(l => !existingIds.has(l.id));
-
-                    const combinedLetters = [...trulyNewLetters, ...freshCache]
-                        .sort((a, b) => new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime());
-
-                    // 5. Update Store (persist auto-saves this to AsyncStorage)
-                    set({
-                        cachedLetters: combinedLetters,
-                        cachedSenderMap: existingMap,
-                    });
-
-                    return trulyNewLetters;
-                } catch (e) {
-                    console.error('Error in delta sync', e);
-                    return [];
-                } finally {
-                    set({ isSyncing: false });
-                }
+            getPostForLetter: (letter: Letter) => {
+                return get().cachedPosts[letter.post_id];
             },
 
-            loadUserById: async (userId: string) => {
-                const { data, error } = await supabase
-                    .from('users')
-                    .select('*')
-                    .eq('id', userId)
-                    .single();
+            // --- Carnet (unchanged) ---
+            addContacts: async (contactIds: string[]) => {
+                const { currentUser, carnet } = get();
+                if (!currentUser) return;
 
-                if (error) {
-                    if (error.code !== 'PGRST116') console.error("Error loading user by id", error);
-                    return null;
+                const rows = contactIds.map(id => ({ owner_id: currentUser.id, contact_id: id }));
+                const { error } = await supabase
+                    .from('carnet')
+                    .upsert(rows, { onConflict: 'owner_id,contact_id' });
+
+                if (error) throw error;
+
+                const newCarnet = [...carnet];
+                const now = new Date().toISOString();
+                for (const id of contactIds) {
+                    if (!newCarnet.find(c => c.contactId === id)) {
+                        newCarnet.push({ contactId: id, muted: false, addedAt: now });
+                    }
                 }
-                return data as AppUser;
+                set({ carnet: newCarnet });
             },
 
-            fetchAddressBook: async () => {
+            removeContact: async (contactId: string) => {
+                const { currentUser, carnet } = get();
+                if (!currentUser) return;
+
+                const { error } = await supabase
+                    .from('carnet')
+                    .delete()
+                    .match({ owner_id: currentUser.id, contact_id: contactId });
+
+                if (error) throw error;
+                set({ carnet: carnet.filter(c => c.contactId !== contactId) });
+            },
+
+            toggleMute: async (contactId: string) => {
+                const { currentUser, carnet } = get();
+                if (!currentUser) return;
+
+                const contact = carnet.find(c => c.contactId === contactId);
+                if (!contact) return;
+
+                const newMuted = !contact.muted;
+                const { error } = await supabase
+                    .from('carnet')
+                    .update({ muted: newMuted })
+                    .match({ owner_id: currentUser.id, contact_id: contactId });
+
+                if (error) throw error;
+                set({
+                    carnet: carnet.map(c =>
+                        c.contactId === contactId ? { ...c, muted: newMuted } : c
+                    ),
+                });
+            },
+
+            syncCarnet: async () => {
                 const { currentUser } = get();
-                if (!currentUser) return [];
+                if (!currentUser) return;
 
                 const { data, error } = await supabase
-                    .from('address_book')
-                    .select('*')
-                    .eq('owner_id', currentUser.id)
+                    .from('carnet')
+                    .select('contact_id, muted, created_at')
                     .order('created_at', { ascending: true });
 
-                if (error) {
-                    console.error("Error fetching address book", error);
-                    throw error;
-                }
-                return data as AddressBookEntry[];
-            },
-
-            addAddressBookEntry: async (name: string, address: string) => {
-                const { currentUser } = get();
-                if (!currentUser) throw new Error("No user");
-
-                const { error } = await supabase
-                    .from('address_book')
-                    .insert({
-                        owner_id: currentUser.id,
-                        name,
-                        address
+                if (error) throw error;
+                if (data) {
+                    set({
+                        carnet: data.map(row => ({
+                            contactId: row.contact_id,
+                            muted: row.muted,
+                            addedAt: row.created_at,
+                        })),
                     });
-
-                if (error) {
-                    console.error("Error adding address book entry", error);
-                    throw error;
                 }
             },
 
-            deleteAddressBookEntry: async (entryId: string) => {
-                const { error } = await supabase
-                    .from('address_book')
-                    .delete()
-                    .eq('id', entryId);
-
-                if (error) {
-                    console.error("Error deleting address book entry", error);
-                    throw error;
-                }
+            getActiveCarnetIds: () => {
+                return get().carnet.filter(c => !c.muted).map(c => c.contactId);
             },
-        }), // End of store functions
+
+            // --- Broadcast ---
+            broadcastPostcard: async (params) => {
+                const { error, data } = await supabase.rpc('broadcast_postcard', {
+                    p_recto_url: params.rectoUrl,
+                    p_selfie_url: params.selfieUrl,
+                });
+
+                if (error) throw error;
+                return data as string; // post_id UUID
+            },
+
+            // --- Comments (not persisted — fetched fresh) ---
+            fetchComments: async (postId: string) => {
+                const { data, error } = await supabase
+                    .from('comments')
+                    .select('*, author:users(id, display_name)')
+                    .eq('post_id', postId)
+                    .order('created_at', { ascending: true });
+
+                if (error) throw error;
+
+                return (data || []).map((row: any) => ({
+                    id: row.id,
+                    post_id: row.post_id,
+                    author_id: row.author_id,
+                    body: row.body,
+                    created_at: row.created_at,
+                    author_name: row.author?.display_name || 'Unknown',
+                }));
+            },
+
+            addComment: async (postId: string, body: string) => {
+                const { currentUser } = get();
+                if (!currentUser) throw new Error('Not logged in');
+
+                const { data, error } = await supabase
+                    .from('comments')
+                    .insert({
+                        post_id: postId,
+                        author_id: currentUser.id,
+                        body: body.trim(),
+                    })
+                    .select()
+                    .single();
+
+                if (error) throw error;
+
+                return {
+                    ...data,
+                    author_name: currentUser.display_name,
+                } as Comment;
+            },
+
+            // --- Onboarding ---
+            setHasPostedFirst: (value: boolean) => set({ hasPostedFirst: value }),
+        }),
         {
-            name: 'postal-storage',
+            name: 'postcards-storage',  // NEW key — won't conflict with old 'postal-storage'
             storage: createJSONStorage(() => AsyncStorage),
             partialize: (state) => ({
                 cachedLetters: state.cachedLetters,
+                cachedPosts: state.cachedPosts,
                 cachedSenderMap: state.cachedSenderMap,
+                carnet: state.carnet,
+                hasPostedFirst: state.hasPostedFirst,
             }),
         }
     )

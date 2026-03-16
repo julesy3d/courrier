@@ -7,13 +7,15 @@ import {
     Rect,
     RoundedRect,
     Skia,
-    Text as SkiaText,
-    useFont,
-    useImage
+    useImage,
+    LinearGradient,
+    RadialGradient,
+    vec,
 } from '@shopify/react-native-skia';
 import * as Haptics from 'expo-haptics';
-import React, { useEffect, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Dimensions, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import CommentsSheet from './CommentsSheet';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Reanimated, {
     runOnJS,
@@ -23,20 +25,14 @@ import Reanimated, {
     useSharedValue,
     withSpring,
     withTiming,
+    SharedValue,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from '../lib/i18n';
 import {
     IMAGE_INSET,
-    STAMP_BOX_CENTER_X,
-    STAMP_BOX_CENTER_Y,
-    VERSO_CONTENT_LEFT,
-    VERSO_CONTENT_RIGHT,
-    VERSO_MESSAGE_TOP,
-    VERSO_RECIPIENT_ADDR_Y,
-    VERSO_RECIPIENT_NAME_Y
 } from '../lib/postcardLayout';
-import { seededRandom } from '../lib/random';
+import { Comment, useStore } from '../lib/store';
 
 // ── Dimensions ──────────────────────────────────────────────
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
@@ -49,54 +45,102 @@ function clamp(val: number, min: number, max: number) {
     return Math.min(Math.max(val, min), max);
 }
 
-function wrapText(text: string, font: any, maxWidth: number): string[] {
-    const words = text.split(' ');
-    const lines: string[] = [];
-    let currentLine = '';
-
-    for (const word of words) {
-        const testLine = currentLine ? currentLine + ' ' + word : word;
-        const width = font.getTextWidth(testLine);
-        if (width > maxWidth && currentLine) {
-            lines.push(currentLine);
-            currentLine = word;
-        } else {
-            currentLine = testLine;
-        }
-    }
-    if (currentLine) lines.push(currentLine);
-    return lines;
-}
-
 const SHADOW_COLOR = Skia.Color('rgba(0,0,0,0.3)');
-const EDGE_COLOR = Skia.Color('#F5F0EB');
+
+// ── Hooks ─────────────────────────────────────────────────
+function useLightLayerValues(tiltX: SharedValue<number>, tiltY: SharedValue<number>, cardWidth: number, cardHeight: number) {
+    const glareAngle = useDerivedValue(() => Math.atan2(tiltX.value, tiltY.value));
+    const glareOffset = useDerivedValue(() => {
+        const magnitude = Math.sqrt(tiltX.value ** 2 + tiltY.value ** 2);
+        return (magnitude / 15) * 0.3;
+    });
+    const glareStart = useDerivedValue(() => {
+        const angle = glareAngle.value;
+        const radius = Math.max(cardWidth, cardHeight) * 0.8;
+        const offset = glareOffset.value * radius * 2;
+        const cx = cardWidth / 2;
+        const cy = cardHeight / 2;
+        return vec(
+            cx - Math.cos(angle) * radius + Math.sin(angle) * offset,
+            cy - Math.sin(angle) * radius - Math.cos(angle) * offset
+        );
+    });
+    const glareEnd = useDerivedValue(() => {
+        const angle = glareAngle.value;
+        const radius = Math.max(cardWidth, cardHeight) * 0.8;
+        const offset = glareOffset.value * radius * 2;
+        const cx = cardWidth / 2;
+        const cy = cardHeight / 2;
+        return vec(
+            cx + Math.cos(angle) * radius + Math.sin(angle) * offset,
+            cy + Math.sin(angle) * radius - Math.cos(angle) * offset
+        );
+    });
+
+    const specularCenter = useDerivedValue(() => vec(
+        cardWidth / 2 + tiltY.value * 8,
+        cardHeight / 2 + tiltX.value * 8
+    ));
+
+    const fresnelStart = useDerivedValue(() => vec(cardWidth / 2, cardHeight / 2));
+    const fresnelEnd = useDerivedValue(() => vec(
+        cardWidth / 2 + tiltY.value * 20,
+        cardHeight / 2 + tiltX.value * 20
+    ));
+    const fresnelOpacity = useDerivedValue(() => Math.min(1, (Math.abs(tiltX.value) + Math.abs(tiltY.value)) / 30));
+
+    const innerShadowLeft = useDerivedValue(() => clamp(tiltY.value / 15, 0, 1));
+    const innerShadowRight = useDerivedValue(() => clamp(-tiltY.value / 15, 0, 1));
+    const innerShadowTop = useDerivedValue(() => clamp(-tiltX.value / 15, 0, 1));
+    const innerShadowBottom = useDerivedValue(() => clamp(tiltX.value / 15, 0, 1));
+
+    return { glareStart, glareEnd, specularCenter, fresnelStart, fresnelEnd, fresnelOpacity, innerShadowLeft, innerShadowRight, innerShadowTop, innerShadowBottom };
+}
 
 // ── Props ───────────────────────────────────────────────────
 interface PostcardInspectorProps {
     letter: any;
-    senderAddress: string;
-    fromName: string;
-    toName: string;
-    isReturned: boolean;
-    recipientAddress?: string;
+    post: any;
+    senderName: string;
     onDismiss: () => void;
-    onReply: () => void;
+    mode?: 'inspect' | 'preview';
+    onRetake?: () => void;
+    onSend?: () => void;
 }
 
 export default function PostcardInspector({
     letter,
-    senderAddress,
-    fromName,
-    toName,
-    isReturned,
-    recipientAddress,
+    post,
+    senderName,
     onDismiss,
-    onReply,
+    mode = 'inspect',
+    onRetake,
+    onSend,
 }: PostcardInspectorProps) {
     const { t, locale } = useTranslation();
     const insets = useSafeAreaInsets();
     const cardWidth = INSPECTOR_CARD_WIDTH;
     const cardHeight = INSPECTOR_CARD_HEIGHT;
+
+    const [showComments, setShowComments] = useState(false);
+    const [commentCount, setCommentCount] = useState(0);
+
+    const fetchCommentCount = useCallback(() => {
+        if (post?.id) {
+            useStore.getState().fetchComments(post.id)
+                .then((comments: Comment[]) => setCommentCount(comments.length))
+                .catch(() => {});
+        }
+    }, [post?.id]);
+
+    useEffect(() => {
+        fetchCommentCount();
+    }, [fetchCommentCount]);
+
+    const handleCloseComments = useCallback(() => {
+        setShowComments(false);
+        fetchCommentCount();
+    }, [fetchCommentCount]);
 
     // Fade IN/OUT animation
     const overlayOpacity = useSharedValue(0);
@@ -126,118 +170,74 @@ export default function PostcardInspector({
     const versoTextureFR = useImage(require('../assets/images/postcard_verso_FR.webp'));
     const versoTextureENG = useImage(require('../assets/images/postcard_verso_ENG.webp'));
     const versoTexture = locale === 'fr' ? versoTextureFR : versoTextureENG;
-    const photoImage = useImage(letter.image_url);
-    const stampImage = useImage(require('../assets/images/stamp.png'));
-    const tamponImage = useImage(require('../assets/images/tampon.png'));
-
-    const font = useFont(require('../assets/fonts/Georgia.ttf'), 14);
-    const smallFont = useFont(require('../assets/fonts/Georgia.ttf'), 11);
-
-    // ── Deterministic stamp/postmark offsets (same as Postcard.tsx) ──
-    const deliveredOffsets = useMemo(() => {
-        if (!letter.sent_at) {
-            return { stampRot: 0, stampDx: 0, stampDy: 0, tamponRot: 0, tamponDx: 0, tamponDy: 0 };
-        }
-        const rand = seededRandom(letter.sent_at);
-        return {
-            stampRot: (rand() * 4) - 2,
-            stampDx: (rand() * 4) - 2,
-            stampDy: (rand() * 4) - 2,
-            tamponRot: (rand() * 10) - 5,
-            tamponDx: (rand() * 8) - 4,
-            tamponDy: (rand() * 6) - 3,
-        };
-    }, [letter.sent_at]);
-
-    // ── Wrap message body text ──────────────────────────────
-    const bodyLines = useMemo(() => {
-        if (!font || !letter.body) return [];
-        const maxW = cardWidth * (VERSO_CONTENT_RIGHT - VERSO_CONTENT_LEFT) - 8;
-        return wrapText(letter.body, font, maxW);
-    }, [font, letter.body, cardWidth]);
+    const rectoPhoto = useImage(post?.recto_url);
+    const selfiePhoto = useImage(post?.selfie_url);
 
     // ── Shared values for gesture ───────────────────────────
-    const tiltX = useSharedValue(5);   // resting tilt
-    const tiltY = useSharedValue(0);
-    const startTiltX = useSharedValue(0);
-    const startTiltY = useSharedValue(0);
+    const flipAngle = useSharedValue(0); // for flip (0 or 180)
+    const tiltX = useSharedValue(0);     // pitch (forward/back)
+    const tiltY = useSharedValue(0);     // yaw (left/right)
     const isFlipped = useSharedValue(false);
 
-    // ── 3D transform (driven by tilt) ───────────────────────
+    // ── Flip mid-progress (peaks at 1.0 when angle = 90°) ──
+    const flipMidProgress = useDerivedValue(() => {
+        const progress = Math.abs(flipAngle.value) / 180;
+        return 1 - Math.abs(progress - 0.5) * 2;
+    });
+
+    // ── Single center-axis card transform with lift ─────────
     const cardTransform = useDerivedValue(() => {
+        const lift = -flipMidProgress.value * 20; // card rises 20px at 90°
         return [
-            { rotateX: (tiltX.value * Math.PI) / 180 },
-            { rotateY: (tiltY.value * Math.PI) / 180 },
+            { perspective: 800 },
+            { translateY: lift },
+            { rotateX: ((-tiltX.value) * Math.PI) / 180 },
+            { rotateY: ((tiltY.value + flipAngle.value) * Math.PI) / 180 },
         ];
     });
 
-    // ── Which face is visible? (numeric for opacity) ────────
-    const rectoOpacity = useDerivedValue(() => {
-        return Math.abs(tiltY.value) > 90 ? 0 : 1;
-    });
+    // ── Face visibility ─────────────────────────────────────
+    const combinedTiltY = useDerivedValue(() => tiltY.value + flipAngle.value);
+    const rectoOpacity = useDerivedValue(() => Math.abs(combinedTiltY.value) > 90 ? 0 : 1);
+    const versoOpacity = useDerivedValue(() => Math.abs(combinedTiltY.value) > 90 ? 1 : 0);
 
-    const versoOpacity = useDerivedValue(() => {
-        return Math.abs(tiltY.value) > 90 ? 1 : 0;
-    });
+    // ── Skia Light Layer & Parallax Values ──────────────────
+    const versoTiltY = useDerivedValue(() => -tiltY.value);
+    const rectoLight = useLightLayerValues(tiltX, tiltY, cardWidth, cardHeight);
+    const versoLight = useLightLayerValues(tiltX, versoTiltY, cardWidth, cardHeight);
 
-    const nearEdgeOpacity = useDerivedValue(() => {
-        return Math.abs(Math.abs(tiltY.value) - 90) < 10 ? 1 : 0;
-    });
+    const PARALLAX_BLEED = 8;
+    const photoClipRect = useMemo(() =>
+        Skia.XYWHRect(IMAGE_INSET, IMAGE_INSET, cardWidth - IMAGE_INSET * 2, cardHeight - IMAGE_INSET * 2),
+        [cardWidth, cardHeight]
+    );
 
-    // ── Shadow offsets ──────────────────────────────────────
-    const shadowBlur = useDerivedValue(() => 12 + Math.abs(tiltX.value) * 0.2);
+    const rectoPhotoOffsetX = useDerivedValue(() => -tiltY.value * 0.4);
+    const rectoPhotoOffsetY = useDerivedValue(() => tiltX.value * 0.4);
+    const rectoPhotoTransform = useDerivedValue(() => [
+        { translateX: rectoPhotoOffsetX.value },
+        { translateY: rectoPhotoOffsetY.value },
+    ]);
 
-    // Shadow transform as a derived value
-    const shadowTransform = useDerivedValue(() => {
-        return [
-            { translateX: tiltY.value * -0.3 },
-            { translateY: tiltX.value * 0.3 + 10 },
-        ];
-    });
+    const versoPhotoOffsetX = useDerivedValue(() => versoTiltY.value * 0.4);
+    const versoPhotoOffsetY = useDerivedValue(() => tiltX.value * 0.4);
+    const versoPhotoTransform = useDerivedValue(() => [
+        { translateX: versoPhotoOffsetX.value },
+        { translateY: versoPhotoOffsetY.value },
+    ]);
+
+    // ── Shadow — grows at mid-flip ───────────────────────────
+    const shadowTransform = useDerivedValue(() => [
+        { translateX: tiltY.value * -0.5 },
+        { translateY: -tiltX.value * 0.5 + 10 + flipMidProgress.value * 6 },
+    ]);
+    const shadowBlur = useDerivedValue(() =>
+        12 + Math.abs(tiltX.value) * 0.3 + flipMidProgress.value * 8
+    );
 
     // ── Gestures ────────────────────────────────────────────
-    const panGesture = Gesture.Pan()
-        .onStart(() => {
-            startTiltY.value = tiltY.value;
-            startTiltX.value = tiltX.value;
-        })
-        .onUpdate((e) => {
-            tiltY.value = clamp(startTiltY.value + (e.translationX * 0.3), -180, 180);
-            tiltX.value = clamp(startTiltX.value + (e.translationY * -0.2), -30, 30);
-        })
-        .onEnd((e) => {
-            const absY = Math.abs(tiltY.value);
-
-            if (absY > 40) {
-                // Flip
-                const flipTarget = isFlipped.value ? 0 : 180;
-                const direction = tiltY.value > 0 ? 1 : -1;
-                tiltY.value = withSpring(flipTarget * direction, {
-                    damping: 25,
-                    stiffness: 200,
-                    mass: 0.5,
-                    velocity: e.velocityX * 0.15,
-                });
-                isFlipped.value = !isFlipped.value;
-                runOnJS(Haptics.impactAsync)(Haptics.ImpactFeedbackStyle.Light);
-            } else {
-                // Spring back to resting angle
-                const restingY = isFlipped.value ? (tiltY.value > 0 ? 180 : -180) : 0;
-                tiltY.value = withSpring(restingY, {
-                    damping: 22,
-                    stiffness: 200,
-                });
-            }
-
-            // Vertical tilt → slight resting angle
-            tiltX.value = withSpring(5, {
-                damping: 22,
-                stiffness: 200,
-            });
-        });
-
     const tapGesture = Gesture.Tap()
-        .maxDuration(250)
+        .maxDuration(300)
         .maxDistance(15)
         .onEnd((e) => {
             const isOutsideX = e.x < CANVAS_PADDING || e.x > CANVAS_PADDING + cardWidth;
@@ -245,14 +245,43 @@ export default function PostcardInspector({
 
             if (isOutsideX || isOutsideY) {
                 runOnJS(handleDismiss)();
+            } else {
+                const flipTarget = isFlipped.value ? 0 : 180;
+                // Tap on card → flip
+                flipAngle.value = withSpring(flipTarget, {
+                    damping: 26,
+                    stiffness: 180,
+                    mass: 0.8,
+                });
+                isFlipped.value = !isFlipped.value;
+                runOnJS(Haptics.impactAsync)(Haptics.ImpactFeedbackStyle.Medium);
             }
+        });
+
+    const lastHapticAngle = useRef(0);
+
+    const panGesture = Gesture.Pan()
+        .onUpdate((e) => {
+            tiltX.value = clamp(e.translationY / 8, -15, 15);
+            tiltY.value = clamp(e.translationX / 8, -15, 15);
+
+            const currentAngle = Math.sqrt(tiltX.value ** 2 + tiltY.value ** 2);
+            if (Math.abs(currentAngle - lastHapticAngle.current) > 5) {
+                lastHapticAngle.current = currentAngle;
+                runOnJS(Haptics.selectionAsync)();
+            }
+        })
+        .onEnd(() => {
+            tiltX.value = withSpring(0, { damping: 60, stiffness: 80, mass: 2.5 });
+            tiltY.value = withSpring(0, { damping: 60, stiffness: 80, mass: 2.5 });
+            lastHapticAngle.current = 0;
         });
 
     const composedGesture = Gesture.Exclusive(panGesture, tapGesture);
 
     // ── Haptics: detect crossing ±90° ───────────────────────
     useAnimatedReaction(
-        () => tiltY.value,
+        () => flipAngle.value,
         (current, previous) => {
             if (previous !== null) {
                 const crossedForward = (previous < 90 && current >= 90) || (previous > -90 && current <= -90);
@@ -264,45 +293,144 @@ export default function PostcardInspector({
         }
     );
 
-
-    const { versoContentLeft, stampW, stampH, stampX, stampY, tamponW, tamponH, tamponX, tamponY, senderLine, addressLine, dateString, bottomOffset } = useMemo(() => {
-        const versoContentLeft = cardWidth * VERSO_CONTENT_LEFT;
-        const stampW = cardWidth * 0.285;
-        const stampH = stampW * 1.25;
-        const stampX = cardWidth * STAMP_BOX_CENTER_X - stampW / 2 + deliveredOffsets.stampDx;
-        const stampY = cardHeight * STAMP_BOX_CENTER_Y - stampH / 2 + deliveredOffsets.stampDy;
-        const tamponAspect = 280 / 120;
-        const tamponH = stampH * 0.74;
-        const tamponW = tamponH * tamponAspect;
-        const tamponX = Math.max(0, Math.min(
-            cardWidth * STAMP_BOX_CENTER_X - tamponW * 0.72 + deliveredOffsets.tamponDx,
-            cardWidth - tamponW
-        ));
-        const tamponY = Math.max(0, Math.min(
-            cardHeight * STAMP_BOX_CENTER_Y - tamponH / 2 + deliveredOffsets.tamponDy,
-            cardHeight - tamponH
-        ));
-        const senderLine = fromName ? `${fromName} — ${senderAddress}` : senderAddress;
-        const addressLine = recipientAddress || senderAddress;
+    const { dateString, bottomOffset } = useMemo(() => {
         const dateString = letter.sent_at
             ? new Date(letter.sent_at).toLocaleDateString(undefined, { dateStyle: 'full' } as any)
             : '';
         const bottomOffset = cardTop + cardHeight + 20;
 
-        return { versoContentLeft, stampW, stampH, stampX, stampY, tamponW, tamponH, tamponX, tamponY, senderLine, addressLine, dateString, bottomOffset };
-    }, [cardWidth, cardHeight, deliveredOffsets, fromName, senderAddress, recipientAddress, letter.sent_at, cardTop]);
+        return { dateString, bottomOffset };
+    }, [letter.sent_at, cardTop, cardHeight]);
 
     const cardOrigin = useMemo(() => Skia.Point(CANVAS_PADDING + cardWidth / 2, CANVAS_PADDING + cardHeight / 2), [cardWidth, cardHeight]);
     const versoOrigin = useMemo(() => Skia.Point(cardWidth / 2, cardHeight / 2), [cardWidth, cardHeight]);
+    const cardClip = useMemo(() =>
+        Skia.RRectXY(Skia.XYWHRect(0, 0, cardWidth, cardHeight), 8, 8),
+        [cardWidth, cardHeight]
+    );
+
+    const renderLightAndGrain = (light: ReturnType<typeof useLightLayerValues>, isVerso: boolean) => (
+        <>
+            {/* Layer 1: Glare (diffuse wash) */}
+            <Group blendMode="overlay">
+                <Rect x={0} y={0} width={cardWidth} height={cardHeight}>
+                    <LinearGradient
+                        start={light.glareStart}
+                        end={light.glareEnd}
+                        colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.05)', 'rgba(255,255,255,0)']}
+                    />
+                </Rect>
+            </Group>
+
+            {/* Layer 2: Specular (inset to photo bounds) */}
+            <Group blendMode="softLight">
+                <Rect
+                    x={IMAGE_INSET}
+                    y={IMAGE_INSET}
+                    width={cardWidth - IMAGE_INSET * 2}
+                    height={cardHeight - IMAGE_INSET * 2}
+                >
+                    <RadialGradient
+                        c={light.specularCenter}
+                        r={cardWidth * 2.0}
+                        colors={['rgba(255,255,255,0.07)', 'rgba(255,255,255,0.02)', 'rgba(255,255,255,0)']}
+                    />
+                    <Blur blur={15} />
+                </Rect>
+            </Group>
+
+            {/* Layer 3: Fresnel edge catch */}
+            <Group blendMode="screen" opacity={light.fresnelOpacity}>
+                <Rect x={0} y={0} width={cardWidth} height={cardHeight}>
+                    <LinearGradient
+                        start={light.fresnelStart}
+                        end={light.fresnelEnd}
+                        colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.15)']}
+                    />
+                </Rect>
+            </Group>
+
+            {/* ── Inner edge shadows (thickness simulation) ── */}
+            {/* Left inner shadow — visible when tilting right */}
+            <Group opacity={light.innerShadowLeft}>
+                <Rect x={0} y={0} width={12} height={cardHeight}>
+                    <LinearGradient
+                        start={vec(0, 0)}
+                        end={vec(12, 0)}
+                        colors={['rgba(0,0,0,0.12)', 'rgba(0,0,0,0)']}
+                    />
+                </Rect>
+            </Group>
+
+            {/* Right inner shadow — visible when tilting left */}
+            <Group opacity={light.innerShadowRight}>
+                <Rect x={cardWidth - 12} y={0} width={12} height={cardHeight}>
+                    <LinearGradient
+                        start={vec(cardWidth, 0)}
+                        end={vec(cardWidth - 12, 0)}
+                        colors={['rgba(0,0,0,0.12)', 'rgba(0,0,0,0)']}
+                    />
+                </Rect>
+            </Group>
+
+            {/* Top inner shadow — visible when tilting toward viewer */}
+            <Group opacity={light.innerShadowTop}>
+                <Rect x={0} y={0} width={cardWidth} height={12}>
+                    <LinearGradient
+                        start={vec(0, 0)}
+                        end={vec(0, 12)}
+                        colors={['rgba(0,0,0,0.12)', 'rgba(0,0,0,0)']}
+                    />
+                </Rect>
+            </Group>
+
+            {/* Bottom inner shadow — visible when tilting away */}
+            <Group opacity={light.innerShadowBottom}>
+                <Rect x={0} y={cardHeight - 12} width={cardWidth} height={12}>
+                    <LinearGradient
+                        start={vec(0, cardHeight)}
+                        end={vec(0, cardHeight - 12)}
+                        colors={['rgba(0,0,0,0.12)', 'rgba(0,0,0,0)']}
+                    />
+                </Rect>
+            </Group>
+        </>
+    );
 
     return (
         <Reanimated.View style={[StyleSheet.absoluteFillObject, overlayStyle]} pointerEvents="box-none">
             {/* Dark backdrop */}
-            <TouchableOpacity
-                activeOpacity={1}
-                style={[StyleSheet.absoluteFillObject, { backgroundColor: 'rgba(0,0,0,0.5)' }]}
-                onPress={handleDismiss}
-            />
+            <View style={[StyleSheet.absoluteFillObject]}>
+                <TouchableOpacity
+                    activeOpacity={1}
+                    style={[StyleSheet.absoluteFillObject, {
+                        backgroundColor: mode === 'preview' ? 'rgba(245,242,238,0.97)' : 'rgba(0,0,0,0.5)',
+                    }]}
+                    onPress={handleDismiss}
+                />
+            </View>
+
+            {mode === 'preview' && (
+                <TouchableOpacity
+                    onPress={() => onDismiss()}
+                    style={{
+                        position: 'absolute',
+                        top: insets.top + 12,
+                        right: 16,
+                        width: 40,
+                        height: 40,
+                        borderRadius: 20,
+                        backgroundColor: 'rgba(255,255,255,0.15)',
+                        borderWidth: StyleSheet.hairlineWidth,
+                        borderColor: 'rgba(255,255,255,0.2)',
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                        zIndex: 10,
+                    }}
+                >
+                    <Ionicons name="close" size={22} color="rgba(255,255,255,0.8)" />
+                </TouchableOpacity>
+            )}
 
             {/* Card — Skia Canvas with gesture */}
             <GestureDetector gesture={composedGesture}>
@@ -321,128 +449,89 @@ export default function PostcardInspector({
                                 y={CANVAS_PADDING}
                                 width={cardWidth}
                                 height={cardHeight}
-                                r={4}
+                                r={8}
                                 color={SHADOW_COLOR}
                             >
                                 <Blur blur={shadowBlur} />
                             </RoundedRect>
                         </Group>
 
-                        {/* ── Card with 3D transform ── */}
-                        <Group
-                            transform={cardTransform}
-                            origin={cardOrigin}
-                        >
+                        {/* ── Card ── */}
+                        <Group transform={cardTransform} origin={cardOrigin}>
                             <Group transform={[{ translateX: CANVAS_PADDING }, { translateY: CANVAS_PADDING }]}>
-                                {/* ── Edge reveal (thin cream strip near 90°) ── */}
-                                <Group>
-                                    <Rect
-                                        x={cardWidth / 2 - 1.5}
-                                        y={0}
-                                        width={3}
-                                        height={cardHeight}
-                                        color={EDGE_COLOR}
-                                        opacity={nearEdgeOpacity}
-                                    />
-                                </Group>
-
-                                {/* ── RECTO (photo side) ── */}
-                                <Group opacity={rectoOpacity}>
-                                    {rectoTexture && (
-                                        <Image
-                                            image={rectoTexture}
-                                            x={0} y={0}
-                                            width={cardWidth}
-                                            height={cardHeight}
-                                            fit="cover"
-                                        />
-                                    )}
-                                    {photoImage && (
-                                        <Image
-                                            image={photoImage}
-                                            x={IMAGE_INSET} y={IMAGE_INSET}
-                                            width={cardWidth - IMAGE_INSET * 2}
-                                            height={cardHeight - IMAGE_INSET * 2}
-                                            fit="cover"
-                                        />
-                                    )}
-                                </Group>
-
-                                {/* ── VERSO (message side — mirrored) ── */}
-                                <Group
-                                    opacity={versoOpacity}
-                                    transform={[{ rotateY: Math.PI }]}
-                                    origin={versoOrigin}
-                                >
-                                    {versoTexture && (
-                                        <Image
-                                            image={versoTexture}
-                                            x={0} y={0}
-                                            width={cardWidth}
-                                            height={cardHeight}
-                                            fit="cover"
-                                        />
-                                    )}
-
-                                    {/* Message body (wrapped) */}
-                                    {font && bodyLines.map((line: string, i: number) => (
-                                        <SkiaText
-                                            key={i}
-                                            x={versoContentLeft}
-                                            y={cardHeight * VERSO_MESSAGE_TOP + 16 + i * 20}
-                                            text={line}
-                                            font={font}
-                                            color="#1A1A1A"
-                                        />
-                                    ))}
-
-                                    {/* Sender name + address on first dotted line */}
-                                    {font && (
-                                        <SkiaText
-                                            x={versoContentLeft}
-                                            y={cardHeight * VERSO_RECIPIENT_NAME_Y + 14}
-                                            text={senderLine}
-                                            font={font}
-                                            color="#1A1A1A"
-                                        />
-                                    )}
-
-                                    {/* Recipient address on second dotted line (for returned) or user address */}
-                                    {font && (
-                                        <SkiaText
-                                            x={versoContentLeft}
-                                            y={cardHeight * VERSO_RECIPIENT_ADDR_Y + 14}
-                                            text={addressLine}
-                                            font={font}
-                                            color="#1A1A1A"
-                                        />
-                                    )}
-
-                                    {/* Stamp */}
-                                    {stampImage && (
-                                        <Image
-                                            image={stampImage}
-                                            x={stampX}
-                                            y={stampY}
-                                            width={stampW}
-                                            height={stampH}
-                                            fit="contain"
-                                        />
-                                    )}
-
-                                    {/* Postmark (tampon) */}
-                                    {tamponImage && (
-                                        <Group opacity={0.7}>
+                                {/* ── Rounded Corners Clip ── */}
+                                <Group clip={cardClip}>
+                                    {/* ── RECTO (scene photo — full bleed) ── */}
+                                    <Group opacity={rectoOpacity}>
+                                        {rectoTexture && (
                                             <Image
-                                                image={tamponImage}
-                                                x={tamponX}
-                                                y={tamponY}
-                                                width={tamponW}
-                                                height={tamponH}
-                                                fit="contain"
+                                                image={rectoTexture}
+                                                x={0} y={0}
+                                                width={cardWidth}
+                                                height={cardHeight}
+                                                fit="cover"
                                             />
-                                        </Group>
-                                    )}
+                                        )}
+                                        {rectoPhoto && (
+                                            <Group clip={photoClipRect}>
+                                                <Group transform={rectoPhotoTransform}>
+                                                    <Image
+                                                        image={rectoPhoto}
+                                                        x={IMAGE_INSET - PARALLAX_BLEED}
+                                                        y={IMAGE_INSET - PARALLAX_BLEED}
+                                                        width={cardWidth - IMAGE_INSET * 2 + PARALLAX_BLEED * 2}
+                                                        height={cardHeight - IMAGE_INSET * 2 + PARALLAX_BLEED * 2}
+                                                        fit="cover"
+                                                    />
+                                                </Group>
+                                            </Group>
+                                        )}
+                                        {renderLightAndGrain(rectoLight, false)}
+                                    </Group>
+
+                                    {/* ── VERSO (selfie — full bleed, mirrored for flip) ── */}
+                                    <Group
+                                        opacity={versoOpacity}
+                                        transform={[{ rotateY: Math.PI }]}
+                                        origin={versoOrigin}
+                                    >
+                                        {/* Same paper texture as base — makes it feel like a real card */}
+                                        {rectoTexture && (
+                                            <Image
+                                                image={rectoTexture}
+                                                x={0} y={0}
+                                                width={cardWidth}
+                                                height={cardHeight}
+                                                fit="cover"
+                                            />
+                                        )}
+                                        {/* Selfie photo inset — same dimensions as recto photo */}
+                                        {selfiePhoto ? (
+                                            <Group clip={photoClipRect}>
+                                                <Group transform={versoPhotoTransform}>
+                                                    <Image
+                                                        image={selfiePhoto}
+                                                        x={IMAGE_INSET - PARALLAX_BLEED}
+                                                        y={IMAGE_INSET - PARALLAX_BLEED}
+                                                        width={cardWidth - IMAGE_INSET * 2 + PARALLAX_BLEED * 2}
+                                                        height={cardHeight - IMAGE_INSET * 2 + PARALLAX_BLEED * 2}
+                                                        fit="cover"
+                                                    />
+                                                </Group>
+                                            </Group>
+                                        ) : versoTexture ? (
+                                            // Fallback to verso paper texture if no selfie
+                                            <Image
+                                                image={versoTexture}
+                                                x={0} y={0}
+                                                width={cardWidth}
+                                                height={cardHeight}
+                                                fit="cover"
+                                            />
+                                        ) : null}
+
+                                        {renderLightAndGrain(versoLight, true)}
+                                    </Group>
                                 </Group>
                             </Group>
                         </Group>
@@ -450,7 +539,7 @@ export default function PostcardInspector({
                 </View>
             </GestureDetector>
 
-            {/* Date + Reply button — below canvas */}
+            {/* Sender name + comment button / or Preview actions — below card */}
             <View style={{
                 position: 'absolute',
                 top: bottomOffset,
@@ -458,43 +547,129 @@ export default function PostcardInspector({
                 right: 0,
                 alignItems: 'center',
             }}>
-                <Text style={{
-                    fontFamily: 'Georgia',
-                    fontSize: 13,
-                    color: '#FAF9F6',
-                    textAlign: 'center',
-                    textShadowColor: 'rgba(0,0,0,0.5)',
-                    textShadowOffset: { width: 0, height: 1 },
-                    textShadowRadius: 3,
-                }}>
-                    {dateString}
-                </Text>
-                {!isReturned && (
-                    <TouchableOpacity
-                        onPress={onReply}
-                        style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            marginTop: 16,
-                            padding: 10,
-                        }}
-                    >
-                        <Ionicons name="arrow-undo-outline" size={18} color="rgba(250,249,246,0.8)" />
+                {mode === 'inspect' ? (
+                    <>
                         <Text style={{
-                            fontFamily: 'Georgia',
-                            fontSize: 13,
-                            color: 'rgba(250,249,246,0.8)',
-                            marginLeft: 8,
+                            fontFamily: 'Avenir Next',
+                            fontSize: 14,
+                            fontWeight: '400',
+                            color: '#FAF9F6',
+                            textAlign: 'center',
                             textShadowColor: 'rgba(0,0,0,0.5)',
                             textShadowOffset: { width: 0, height: 1 },
                             textShadowRadius: 3,
                         }}>
-                            {t('letter.reply')}
+                            {senderName}
                         </Text>
-                    </TouchableOpacity>
+                        <Text style={{
+                            fontFamily: 'Avenir Next',
+                            fontSize: 12,
+                            fontWeight: '300',
+                            color: 'rgba(250,249,246,0.5)',
+                            marginTop: 4,
+                            textShadowColor: 'rgba(0,0,0,0.5)',
+                            textShadowOffset: { width: 0, height: 1 },
+                            textShadowRadius: 3,
+                        }}>
+                            {dateString}
+                        </Text>
+
+                        {/* Comment button */}
+                        <TouchableOpacity
+                            onPress={() => {
+                                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                                setShowComments(true);
+                            }}
+                            style={{
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                marginTop: 16,
+                                padding: 10,
+                            }}
+                        >
+                            <Ionicons name="chatbubble-outline" size={20} color="rgba(250,249,246,0.8)" />
+                            {commentCount > 0 && (
+                                <Text style={{
+                                    fontFamily: 'Avenir Next',
+                                    fontSize: 13,
+                                    fontWeight: '500',
+                                    color: 'rgba(250,249,246,0.8)',
+                                    marginLeft: 6,
+                                }}>
+                                    {commentCount}
+                                </Text>
+                            )}
+                        </TouchableOpacity>
+                    </>
+                ) : (
+                    /* Preview mode — Retake / Send buttons */
+                    <View style={{
+                        flexDirection: 'row',
+                        justifyContent: 'space-between',
+                        width: '100%',
+                        paddingHorizontal: 40,
+                        marginTop: 8,
+                    }}>
+                        <TouchableOpacity
+                            onPress={() => {
+                                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                                onRetake?.();
+                            }}
+                            style={{
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                padding: 14,
+                            }}
+                        >
+                            <Ionicons name="refresh-outline" size={20} color="rgba(255,255,255,0.8)" />
+                            <Text style={{
+                                fontFamily: 'Avenir Next',
+                                fontSize: 16,
+                                fontWeight: '500',
+                                color: 'rgba(255,255,255,0.8)',
+                                marginLeft: 8,
+                            }}>
+                                {t('capture.retake' as any) || 'Retake'}
+                            </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            onPress={() => {
+                                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                                onSend?.();
+                            }}
+                            style={{
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                backgroundColor: 'rgba(255,255,255,0.15)',
+                                borderRadius: 14,
+                                paddingVertical: 14,
+                                paddingHorizontal: 24,
+                                borderWidth: StyleSheet.hairlineWidth,
+                                borderColor: 'rgba(255,255,255,0.3)',
+                            }}
+                        >
+                            <Text style={{
+                                fontFamily: 'Avenir Next',
+                                fontSize: 16,
+                                fontWeight: '600',
+                                color: 'rgba(255,255,255,0.95)',
+                                marginRight: 8,
+                            }}>
+                                {t('capture.send' as any) || 'Send'}
+                            </Text>
+                            <Ionicons name="paper-plane-outline" size={18} color="rgba(255,255,255,0.95)" />
+                        </TouchableOpacity>
+                    </View>
                 )}
             </View>
+
+            {mode === 'inspect' && showComments && post && (
+                <CommentsSheet
+                    postId={post.id}
+                    onClose={handleCloseComments}
+                />
+            )}
         </Reanimated.View>
     );
 }

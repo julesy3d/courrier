@@ -10,31 +10,23 @@ import { Theme } from '../../theme';
 export default function LetterDetailScreen() {
     const { id } = useLocalSearchParams<{ id: string }>();
     console.log('Letter detail opened, id:', id);
-    const { currentUser, fetchReceivedLetters, markLetterOpened, loadUserById } = useStore();
+    const { currentUser, cachedLetters, markLetterOpened } = useStore();
 
     const [letter, setLetter] = useState<any>(null);
-    const [contact, setContact] = useState<AppUser | null>(null);
     const [isLoading, setIsLoading] = useState(true);
 
     const { t, locale } = useTranslation();
 
     useEffect(() => {
-        async function loadLetter() {
+        function loadLetter() {
             try {
-                const received = await fetchReceivedLetters();
-
-                const found = received.find(l => l.id === id);
+                const found = cachedLetters.find((l: any) => l.id === id);
                 console.log('Detail: found letter?', !!found, 'id:', id);
                 if (found) {
                     setLetter(found);
 
                     if (found.opened_at === null) {
                         markLetterOpened(found.id).catch(console.error);
-                    }
-
-                    if (found.sender_id) {
-                        const user = await loadUserById(found.sender_id);
-                        setContact(user);
                     }
                 }
             } catch (e) {
@@ -46,12 +38,12 @@ export default function LetterDetailScreen() {
         if (id && currentUser) {
             loadLetter();
         }
-    }, [id, fetchReceivedLetters, markLetterOpened, loadUserById, currentUser]);
+    }, [id, cachedLetters, markLetterOpened, currentUser]);
 
     if (isLoading) {
         return (
             <View style={[styles.container, styles.centered]}>
-                <ActivityIndicator color={Theme.colors.accent} />
+                <ActivityIndicator color="rgba(255,255,255,0.6)" />
                 <Text style={{ marginTop: 16, color: Theme.colors.secondary }}>{t('common.loading')}</Text>
             </View>
         );
@@ -77,7 +69,7 @@ export default function LetterDetailScreen() {
                 headerBackTitle: t('letters.tab'),
                 headerStyle: { backgroundColor: Theme.colors.background },
                 headerShadowVisible: false,
-                headerTintColor: Theme.colors.accent,
+                headerTintColor: '#007AFF',
             }} />
             <ScrollView
                 style={styles.container}
@@ -88,7 +80,6 @@ export default function LetterDetailScreen() {
                 <Postcard
                     mode="view"
                     body={letter.body}
-                    fromAddressUser={contact}
                     dateStr={dateStr}
                 />
             </ScrollView>
@@ -115,6 +106,6 @@ const styles = StyleSheet.create({
     },
     errorText: {
         fontSize: 13,
-        color: Theme.colors.accent,
+        color: '#007AFF',
     },
 });

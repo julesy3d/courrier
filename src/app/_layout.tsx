@@ -8,7 +8,7 @@ import { useStore } from '../lib/store';
 import { Theme } from '../theme';
 
 export default function RootLayout() {
-    const { currentUser, restoreSession, isLoading } = useStore();
+    const { currentUser, restoreSession, isLoading, hasPostedFirst } = useStore();
     const segments = useSegments();
     const router = useRouter();
 
@@ -18,7 +18,7 @@ export default function RootLayout() {
 
     useEffect(() => {
         const subscription = Notifications.addNotificationResponseReceivedListener(response => {
-            router.push('/(tabs)/letters');
+            router.push('/(main)' as any);
         });
         return () => subscription.remove();
     }, [router]);
@@ -27,20 +27,30 @@ export default function RootLayout() {
         if (isLoading) return;
 
         const isAuthRoute = segments[0] === 'onboarding';
+        const isFirstPostRoute = segments[0] === 'first-post';
 
-        if (currentUser) {
-            if (!segments[0] || isAuthRoute) {
-                router.replace('/(tabs)/compose');
+        if (!currentUser) {
+            // Not logged in -> onboarding
+            if (!isAuthRoute) {
+                router.replace('/onboarding');
             }
-        } else if (!currentUser && !isAuthRoute) {
-            router.replace('/onboarding');
+        } else if (!hasPostedFirst) {
+            // Logged in but hasn't posted -> first-post
+            if (!isFirstPostRoute) {
+                router.replace('/first-post');
+            }
+        } else {
+            // Logged in and posted -> main
+            if (!segments[0] || isAuthRoute || isFirstPostRoute) {
+                router.replace('/(main)' as any);
+            }
         }
-    }, [currentUser, isLoading, segments, router]);
+    }, [currentUser, isLoading, hasPostedFirst, segments, router]);
 
     if (isLoading) {
         return (
             <View style={{ flex: 1, backgroundColor: Theme.colors.background, justifyContent: 'center', alignItems: 'center' }}>
-                <ActivityIndicator size="large" color={Theme.colors.accent} />
+                <ActivityIndicator size="large" color="rgba(255,255,255,0.6)" />
             </View>
         );
     }

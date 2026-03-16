@@ -60,13 +60,7 @@ export interface PostcardProps {
     body: string;
     onBodyChange?: (text: string) => void;
 
-    toName?: string;
-    onToNameChange?: (text: string) => void;
-    toAddress?: string;
-    onToAddressChange?: (text: string) => void;
-
     fromName?: string;              // Sender name (view mode only, from existing letters in database)
-    fromAddressUser?: AppUser | null;
 
     viewToAddress?: string; // Override "To" in view mode (returned letters)
 
@@ -76,9 +70,6 @@ export interface PostcardProps {
     // Actions
     isFlipped?: boolean;        // Controlled flip state from parent
     onFlip?: () => void;        // Callback when flip is triggered
-    onSend?: () => void;
-    canSend?: boolean;
-    isSending?: boolean;
 
     // Stamp animation (for send flow)
     stampAnim?: Animated.Value;      // Scale value 0→1, drives stamp appearance
@@ -94,13 +85,9 @@ export default function Postcard({
     mode,
     imageUri, onPickImage,
     body, onBodyChange,
-    toName, onToNameChange,
-    toAddress, onToAddressChange,
     fromName,
-    fromAddressUser,
     viewToAddress,
     dateStr,
-    onSend, canSend = false, isSending = false,
     stampAnim, stampRotation = 0, stampOffsetX = 0, stampOffsetY = 0,
     isDelivered = false,
     letterId,
@@ -310,7 +297,7 @@ export default function Postcard({
                                 {isEditable && (
                                     <Text style={[
                                         styles.charCount,
-                                        { color: body.length >= 380 ? Theme.colors.accent : Theme.colors.secondary }
+                                        { color: body.length >= 380 ? '#FF3B30' : Theme.colors.secondary }
                                     ]}>
                                         {body.length}/{MAX_CHARS}
                                     </Text>
@@ -325,17 +312,9 @@ export default function Postcard({
                                 right: CARD_WIDTH * (1 - VERSO_CONTENT_RIGHT),
                                 height: CARD_HEIGHT * 0.05,
                             }}>
-                                {isEditable ? (
-                                    <TextInput
-                                        style={styles.versoRecipientInput}
-                                        placeholder={t('compose.placeholderToName')}
-                                        placeholderTextColor={Theme.colors.secondary + '60'}
-                                        value={toName}
-                                        onChangeText={onToNameChange}
-                                    />
-                                ) : (
+                                {!isEditable && (
                                     <Text style={styles.versoRecipientText}>
-                                        {fromName ? `${fromName} — ` : ''}{fromAddressUser?.address || t('letters.unknownSender')}
+                                        {fromName ? `${fromName} — ` : ''}{currentUser?.display_name || t('letters.unknownSender')}
                                     </Text>
                                 )}
                             </View>
@@ -348,19 +327,9 @@ export default function Postcard({
                                 right: CARD_WIDTH * (1 - VERSO_CONTENT_RIGHT),
                                 height: CARD_HEIGHT * 0.05,
                             }}>
-                                {isEditable ? (
-                                    <TextInput
-                                        style={styles.versoRecipientInput}
-                                        placeholder={t('compose.placeholderToAddress')}
-                                        placeholderTextColor={Theme.colors.secondary + '60'}
-                                        value={toAddress}
-                                        onChangeText={onToAddressChange}
-                                        autoCorrect={false}
-                                        autoCapitalize="none"
-                                    />
-                                ) : (
+                                {!isEditable && (
                                     <Text style={styles.versoRecipientText}>
-                                        {viewToAddress || currentUser?.address || '—'}
+                                        {viewToAddress || currentUser?.display_name || '—'}
                                     </Text>
                                 )}
                             </View>
@@ -492,7 +461,7 @@ const styles = StyleSheet.create({
     // === VERSO (body text + addresses) ===
     versoBodyInput: {
         flex: 1,
-        fontFamily: 'Georgia',
+        fontFamily: 'Avenir Next',
         fontSize: 14,
         lineHeight: 20,
         color: Theme.colors.text,
@@ -501,7 +470,7 @@ const styles = StyleSheet.create({
     },
     versoBodyText: {
         flex: 1,
-        fontFamily: 'Georgia',
+        fontFamily: 'Avenir Next',
         fontSize: 14,
         lineHeight: 20,
         color: Theme.colors.text,
@@ -514,14 +483,14 @@ const styles = StyleSheet.create({
         fontFamily: Theme.fonts.body,
     },
     versoRecipientInput: {
-        fontFamily: 'Georgia',
+        fontFamily: 'Avenir Next',
         fontSize: 14,
         color: Theme.colors.text,
         padding: 0,
         height: '100%',
     },
     versoRecipientText: {
-        fontFamily: 'Georgia',
+        fontFamily: 'Avenir Next',
         fontSize: 14,
         color: Theme.colors.text,
     },

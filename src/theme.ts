@@ -8,7 +8,7 @@ export const Theme = {
     secondary: '#8C8C8C',
   },
   fonts: {
-    body: 'Georgia',
+    body: 'Avenir Next',
     // UI font uses system default, no need to specify a fontFamily for UI components
   },
   sizes: {

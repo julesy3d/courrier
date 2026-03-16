@@ -7,7 +7,7 @@ export const HORIZONTAL_PADDING = 40;
 export const CARD_WIDTH = windowWidth - (HORIZONTAL_PADDING * 2);
 export const CARD_ASPECT_RATIO = 297 / 422;
 export const CARD_HEIGHT = CARD_WIDTH / CARD_ASPECT_RATIO;
-export const IMAGE_INSET = 20; // Padding around the inset image on the recto
+export const IMAGE_INSET = 18; // visible paper border around the photo
 
 // Verso layout zones — match the baked texture positions
 export const VERSO_MESSAGE_TOP = 0.230;

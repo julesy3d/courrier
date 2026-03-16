@@ -108,7 +108,7 @@ export default function PostcardCapture({
                     }}>
                         <Text style={{
                             flex: 1,
-                            fontFamily: 'Georgia',
+                            fontFamily: 'Avenir Next',
                             fontSize: 14,
                             lineHeight: 20,
                             color: '#1a1a1a',
@@ -125,7 +125,7 @@ export default function PostcardCapture({
                         right: CARD_WIDTH * (1 - VERSO_CONTENT_RIGHT),
                     }}>
                         {toName ? (
-                            <Text style={{ fontFamily: 'Georgia', fontSize: 14, color: '#1a1a1a' }}>
+                            <Text style={{ fontFamily: 'Avenir Next', fontSize: 14, color: '#1a1a1a' }}>
                                 {toName}
                             </Text>
                         ) : null}
@@ -138,7 +138,7 @@ export default function PostcardCapture({
                         left: CARD_WIDTH * VERSO_CONTENT_LEFT,
                         right: CARD_WIDTH * (1 - VERSO_CONTENT_RIGHT),
                     }}>
-                        <Text style={{ fontFamily: 'Georgia', fontSize: 14, color: '#1a1a1a' }}>
+                        <Text style={{ fontFamily: 'Avenir Next', fontSize: 14, color: '#1a1a1a' }}>
                             {toAddress || (locale === 'fr' ? 'adresse à venir' : 'address pending')}
                         </Text>
                     </View>
@@ -232,7 +232,7 @@ export default function PostcardCapture({
                         }}>
                             <Text style={{
                                 flex: 1,
-                                fontFamily: 'Georgia',
+                                fontFamily: 'Avenir Next',
                                 fontSize: 14,
                                 lineHeight: 20,
                                 color: '#1a1a1a',
@@ -249,7 +249,7 @@ export default function PostcardCapture({
                             right: CARD_WIDTH * (1 - VERSO_CONTENT_RIGHT),
                         }}>
                             {toName ? (
-                                <Text style={{ fontFamily: 'Georgia', fontSize: 14, color: '#1a1a1a' }}>
+                                <Text style={{ fontFamily: 'Avenir Next', fontSize: 14, color: '#1a1a1a' }}>
                                     {toName}
                                 </Text>
                             ) : null}
@@ -262,7 +262,7 @@ export default function PostcardCapture({
                             left: CARD_WIDTH * VERSO_CONTENT_LEFT,
                             right: CARD_WIDTH * (1 - VERSO_CONTENT_RIGHT),
                         }}>
-                            <Text style={{ fontFamily: 'Georgia', fontSize: 14, color: '#1a1a1a' }}>
+                            <Text style={{ fontFamily: 'Avenir Next', fontSize: 14, color: '#1a1a1a' }}>
                                 {toAddress || (locale === 'fr' ? 'adresse à venir' : 'address pending')}
                             </Text>
                         </View>
