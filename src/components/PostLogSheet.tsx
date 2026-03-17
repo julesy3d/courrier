@@ -20,6 +20,48 @@ import { LogEntry, useStore } from '../lib/store';
 import { useTranslation } from '../lib/i18n';
 import { Theme } from '../theme';
 
+type GroupedRepost = {
+    type: 'repost_group';
+    id: string;
+    entries: LogEntry[];
+    created_at: string; // timestamp of the most recent entry in the group
+};
+
+type DisplayEntry = LogEntry | GroupedRepost;
+
+function groupConsecutiveReposts(entries: LogEntry[]): DisplayEntry[] {
+    const result: DisplayEntry[] = [];
+    let currentGroup: LogEntry[] = [];
+
+    const flushGroup = () => {
+        if (currentGroup.length === 0) return;
+        if (currentGroup.length <= 2) {
+            // Don't collapse 1-2 reposts, show them individually
+            result.push(...currentGroup);
+        } else {
+            result.push({
+                type: 'repost_group',
+                id: `group-${currentGroup[0].id}`,
+                entries: currentGroup,
+                created_at: currentGroup[currentGroup.length - 1].created_at,
+            });
+        }
+        currentGroup = [];
+    };
+
+    for (const entry of entries) {
+        if (entry.type === 'repost') {
+            currentGroup.push(entry);
+        } else {
+            flushGroup();
+            result.push(entry);
+        }
+    }
+    flushGroup();
+
+    return result;
+}
+
 interface PostLogSheetProps {
     postId: string;
     onClose: () => void;
@@ -50,6 +92,23 @@ export default function PostLogSheet({ postId, onClose }: PostLogSheetProps) {
     const [isLoading, setIsLoading] = useState(true);
     const [inputText, setInputText] = useState('');
     const [isSending, setIsSending] = useState(false);
+
+    const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+    const toggleGroup = useCallback((groupId: string) => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        setExpandedGroups(prev => {
+            const next = new Set(prev);
+            if (next.has(groupId)) {
+                next.delete(groupId);
+            } else {
+                next.add(groupId);
+            }
+            return next;
+        });
+    }, []);
+
+    const displayEntries = useMemo(() => groupConsecutiveReposts(logEntries), [logEntries]);
 
     const bottomSheetRef = useRef<BottomSheet>(null);
     const snapPoints = useMemo(() => ['50%', '85%'], []);
@@ -149,11 +208,63 @@ export default function PostLogSheet({ postId, onClose }: PostLogSheetProps) {
     ), [inputText, isSending, insets.bottom, handleSend]);
 
     // ── Render a single log entry ──
-    const renderLogEntry = useCallback(({ item }: { item: LogEntry }) => {
-        const isMe = item.user_id === currentUser?.id;
+    const renderDisplayEntry = useCallback(({ item }: { item: DisplayEntry }) => {
+        if (item.type === 'repost_group') {
+            const group = item as GroupedRepost;
+            const isExpanded = expandedGroups.has(group.id);
+
+            if (isExpanded) {
+                // Show all entries individually
+                return (
+                    <View>
+                        {group.entries.map((entry) => (
+                            <View key={entry.id} style={styles.repostRow}>
+                                <Ionicons name="arrow-redo" size={14} color="rgba(255,255,255,0.35)" />
+                                <Text style={styles.repostText}>
+                                    <Text style={[styles.repostName, entry.user_id === currentUser?.id && { color: '#007AFF' }]}>
+                                        {entry.user_name}
+                                    </Text>
+                                    {' '}{t('log.reposted' as any) || 'reposted'}
+                                </Text>
+                                <Text style={styles.timestamp}>{timeAgo(entry.created_at)}</Text>
+                            </View>
+                        ))}
+                        <TouchableOpacity
+                            onPress={() => toggleGroup(group.id)}
+                            style={styles.collapseButton}
+                        >
+                            <Text style={styles.collapseText}>Show less</Text>
+                        </TouchableOpacity>
+                    </View>
+                );
+            }
+
+            // Collapsed view
+            const firstTwo = group.entries.slice(0, 2);
+            const remaining = group.entries.length - 2;
+            const names = firstTwo.map(e => e.user_name).join(', ');
+            const summary = remaining > 0
+                ? `${names}, and ${remaining} ${remaining === 1 ? 'other' : 'others'}`
+                : names;
+
+            return (
+                <TouchableOpacity
+                    onPress={() => toggleGroup(group.id)}
+                    activeOpacity={0.7}
+                    style={styles.repostRow}
+                >
+                    <Ionicons name="arrow-redo" size={14} color="rgba(255,255,255,0.35)" />
+                    <Text style={styles.repostText}>
+                        <Text style={styles.repostName}>{summary}</Text>
+                        {' '}{t('log.reposted' as any) || 'reposted'}
+                    </Text>
+                    <Text style={styles.timestamp}>{timeAgo(group.created_at)}</Text>
+                </TouchableOpacity>
+            );
+        }
 
         if (item.type === 'repost') {
-            // Repost event — single line, icon + name + timestamp
+            const isMe = item.user_id === currentUser?.id;
             return (
                 <View style={styles.repostRow}>
                     <Ionicons name="arrow-redo" size={14} color="rgba(255,255,255,0.35)" />
@@ -169,6 +280,7 @@ export default function PostLogSheet({ postId, onClose }: PostLogSheetProps) {
         }
 
         // Comment
+        const isMe = item.user_id === currentUser?.id;
         return (
             <View style={styles.commentRow}>
                 <View style={{ flex: 1 }}>
@@ -182,7 +294,7 @@ export default function PostLogSheet({ postId, onClose }: PostLogSheetProps) {
                 </View>
             </View>
         );
-    }, [currentUser?.id, t]);
+    }, [currentUser?.id, t, expandedGroups, toggleGroup]);
 
     return (
         <BottomSheet
@@ -218,10 +330,10 @@ export default function PostLogSheet({ postId, onClose }: PostLogSheetProps) {
                     <ActivityIndicator color={Theme.colors.secondary} />
                 </View>
             ) : (
-                <BottomSheetFlatList<LogEntry>
-                    data={logEntries}
-                    keyExtractor={(item: LogEntry) => item.id}
-                    renderItem={renderLogEntry}
+                <BottomSheetFlatList<DisplayEntry>
+                    data={displayEntries}
+                    keyExtractor={(item: DisplayEntry) => item.id}
+                    renderItem={renderDisplayEntry}
                     contentContainerStyle={{
                         paddingHorizontal: 20,
                         paddingBottom: 80,
@@ -324,5 +436,14 @@ const styles = StyleSheet.create({
         fontWeight: '600',
         fontStyle: 'normal',
         color: 'rgba(255,255,255,0.7)',
+    },
+    collapseButton: {
+        paddingVertical: 6,
+        paddingLeft: 22, // align with the repost text (icon width + gap)
+    },
+    collapseText: {
+        fontFamily: 'Avenir Next',
+        fontSize: 12,
+        color: 'rgba(255,255,255,0.4)',
     },
 });

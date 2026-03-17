@@ -8,7 +8,7 @@ import { useStore } from '../lib/store';
 import { Theme } from '../theme';
 
 export default function RootLayout() {
-    const { currentUser, restoreSession, isLoading, hasPostedFirst } = useStore();
+    const { currentUser, restoreSession, isLoading } = useStore();
     const segments = useSegments();
     const router = useRouter();
 
@@ -27,25 +27,19 @@ export default function RootLayout() {
         if (isLoading) return;
 
         const isAuthRoute = segments[0] === 'onboarding';
-        const isFirstPostRoute = segments[0] === 'first-post';
 
         if (!currentUser) {
-            // Not logged in -> onboarding
+            // Not logged in → onboarding
             if (!isAuthRoute) {
                 router.replace('/onboarding');
             }
-        } else if (!hasPostedFirst) {
-            // Logged in but hasn't posted -> first-post
-            if (!isFirstPostRoute) {
-                router.replace('/first-post');
-            }
         } else {
-            // Logged in and posted -> main
-            if (!segments[0] || isAuthRoute || isFirstPostRoute) {
+            // Logged in → main
+            if (!segments[0] || isAuthRoute) {
                 router.replace('/(main)' as any);
             }
         }
-    }, [currentUser, isLoading, hasPostedFirst, segments, router]);
+    }, [currentUser, isLoading, segments, router]);
 
     if (isLoading) {
         return (

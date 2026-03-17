@@ -58,6 +58,7 @@ const en = {
     'share.iMessageText': 'I sent you a postcard! Download Postal to reply.',
 
     // Letters Tab
+    'stack.empty': 'Your postcards are out in the world...',
     'letters.tab': 'Letters',
     'letters.received': 'Received',
     'letters.sent': 'Sent',
@@ -180,6 +181,7 @@ const fr = {
     'share.iMessageText': "Je t'ai envoyé une carte postale ! Télécharge Postal pour y répondre.",
 
     // Letters Tab
+    'stack.empty': 'Tes cartes postales parcourent le monde...',
     'letters.tab': 'Lettres',
     'letters.received': 'Reçues',
     'letters.sent': 'Envoyées',

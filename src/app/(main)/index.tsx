@@ -63,8 +63,8 @@ function GridBackground() {
     );
 }
 
-const CardInPile = React.memo(function CardInPile({ letter, post, index, scrollY, exitDirX, exitDirY, totalCards, cardWidth, cardHeight }: {
-    letter: any;
+const CardInPile = React.memo(function CardInPile({ delivery, post, index, scrollY, exitDirX, exitDirY, totalCards, cardWidth, cardHeight, isReturning }: {
+    delivery: any;
     post: any;
     index: number;
     scrollY: SharedValue<number>;
@@ -73,17 +73,18 @@ const CardInPile = React.memo(function CardInPile({ letter, post, index, scrollY
     totalCards: number;
     cardWidth: number;
     cardHeight: number;
+    isReturning: boolean;
 }) {
     const { t } = useTranslation();
     const rand = useMemo(() => {
-        const r = seededRandom(letter.id);
+        const r = seededRandom(delivery.id);
         return {
-            rotation: (r() - 0.5) * (letter.opened_at === null ? 10 : 6),
+            rotation: (r() - 0.5) * (delivery.opened_at === null ? 10 : 6),
             offsetX: (r() - 0.5) * 10,
             offsetY: (r() - 0.5) * 6,
             sweepDir: r() > 0.5 ? 1 : -1,
         };
-    }, [letter.id, letter.opened_at]);
+    }, [delivery.id, delivery.opened_at]);
 
     const animatedStyle = useAnimatedStyle(() => {
         const N = totalCards;
@@ -210,9 +211,16 @@ const CardInPile = React.memo(function CardInPile({ letter, post, index, scrollY
                         )}
                     </View>
                 </ImageBackground>
+                {isReturning && (
+                    <View style={{
+                        ...StyleSheet.absoluteFillObject,
+                        backgroundColor: 'rgba(255, 0, 0, 0.15)',
+                        borderRadius: 4,
+                    }} />
+                )}
             </View>
 
-            {letter.opened_at === null && (
+            {delivery.opened_at === null && (
                 <View style={{
                     position: 'absolute',
                     top: 12,
@@ -224,15 +232,35 @@ const CardInPile = React.memo(function CardInPile({ letter, post, index, scrollY
                 }} />
             )}
 
-
+            {post?.score != null && post.score > 0 && (
+                <View style={{
+                    position: 'absolute',
+                    bottom: 10,
+                    right: 14,
+                    backgroundColor: 'rgba(0,0,0,0.35)',
+                    borderRadius: 8,
+                    paddingHorizontal: 6,
+                    paddingVertical: 2,
+                }}>
+                    <Text style={{
+                        fontFamily: 'Avenir Next',
+                        fontSize: 11,
+                        fontWeight: '600',
+                        color: 'white',
+                    }}>
+                        {post.score}
+                    </Text>
+                </View>
+            )}
         </Reanimated.View>
     );
 }, (prev, next) => {
-    return prev.letter.id === next.letter.id
+    return prev.delivery.id === next.delivery.id
         && prev.post?.recto_url === next.post?.recto_url
         && prev.index === next.index
         && prev.totalCards === next.totalCards
-        && prev.cardWidth === next.cardWidth;
+        && prev.cardWidth === next.cardWidth
+        && prev.isReturning === next.isReturning;
 });
 
 function GlassButton({ onPress, icon, size = 40, style }: {
@@ -263,8 +291,8 @@ function GlassButton({ onPress, icon, size = 40, style }: {
     );
 }
 
-export default function LettersScreen() {
-    const { markLetterOpened, currentUser, cachedLetters: letters, cachedSenderMap: senderMap, cachedPosts, getPostForLetter, syncLetters, syncCarnet, repostPostcard, dismissPostcard } = useStore();
+export default function StackScreen() {
+    const { markDeliveryOpened, currentUser, cachedDeliveries: deliveries, cachedSenderMap: senderMap, cachedPosts, getPostForDelivery, syncDeliveries, repostCard, dismissCard, heartbeat } = useStore();
     const [isLoading, setIsLoading] = useState(true);
     const isMounted = useRef(true);
 
@@ -279,66 +307,64 @@ export default function LettersScreen() {
     const insets = useSafeAreaInsets();
     const router = useRouter();
 
-    const [selectedLetter, setSelectedLetter] = useState<any>(null);
+    const [selectedDelivery, setSelectedDelivery] = useState<any>(null);
     const [senderName, setSenderName] = useState<string>('');
     const [showCamera, setShowCamera] = useState(false);
 
     useEffect(() => {
         const sub = AppState.addEventListener('change', (state) => {
             if (state === 'active') {
-                syncLetters().then((newLetters) => {
-                    const newUnread = newLetters.filter((l: any) => l.opened_at === null);
+                heartbeat().catch(console.error);
+                syncDeliveries().then((newDeliveries) => {
+                    const newUnread = newDeliveries.filter((d: any) => d.opened_at === null);
                     if (newUnread.length > 0 && isMounted.current) {
                         playReceive();
-                    }
-                }).finally(() => {
-                    if (isMounted.current) {
-                        syncCarnet().catch(console.error);
                     }
                 });
             }
         });
         return () => sub.remove();
-    }, [syncLetters, syncCarnet]);
+    }, [syncDeliveries, heartbeat]);
 
-    const openLetterWrapper = (idx: number) => {
-        const letter = letters[idx];
-        if (!letter) return;
+    const openDeliveryWrapper = (idx: number) => {
+        const delivery = deliveries[idx];
+        if (!delivery) return;
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-        openLetter(letter);
+        openDelivery(delivery);
     };
 
-    const openLetter = async (letter: any) => {
-        setSelectedLetter(letter);
+    const openDelivery = async (delivery: any) => {
+        setSelectedDelivery(delivery);
 
-        // Look up sender name from the cached map
-        const senderNameStr = senderMap[letter.sender_id] || t('letters.unknownSender');
-        setSenderName(senderNameStr);
+        // Look up sender name — use source_user_id (who routed the card to you)
+        const post = getPostForDelivery(delivery);
+        const creatorName = post ? (senderMap[post.sender_id] || t('letters.unknownSender')) : t('letters.unknownSender');
+        setSenderName(creatorName);
 
-        if (!letter.opened_at) {
-            markLetterOpened(letter.id).catch(console.error);
+        if (!delivery.opened_at) {
+            markDeliveryOpened(delivery.id).catch(console.error);
         }
     };
 
-    const closeLetter = () => {
-        setSelectedLetter(null);
+    const closeDelivery = () => {
+        setSelectedDelivery(null);
         setSenderName('');
     };
 
-    const handleRepost = async (postId: string, letterId: string) => {
+    const handleRepost = async (deliveryId: string) => {
         try {
-            await repostPostcard(postId, letterId);
-            closeLetter();
+            await repostCard(deliveryId);
+            closeDelivery();
         } catch (e) {
             console.error('Repost failed', e);
             Alert.alert('Error', 'Could not repost. Try again.');
         }
     };
 
-    const handleDismissCard = async (letterId: string) => {
+    const handleDismissCard = async (deliveryId: string) => {
         try {
-            await dismissPostcard(letterId);
-            closeLetter();
+            await dismissCard(deliveryId);
+            closeDelivery();
         } catch (e) {
             console.error('Dismiss failed', e);
         }
@@ -347,17 +373,16 @@ export default function LettersScreen() {
 
 
     useEffect(() => {
-        syncLetters().then((newLetters) => {
-            const newUnread = newLetters.filter((l: any) => l.opened_at === null);
+        heartbeat().catch(console.error);
+        syncDeliveries().then((newDeliveries) => {
+            const newUnread = newDeliveries.filter((d: any) => d.opened_at === null);
             if (newUnread.length > 0 && isMounted.current) {
                 playReceive();
             }
         }).finally(() => {
-            syncCarnet().catch(console.error).finally(() => {
-                if (isMounted.current) {
-                    setIsLoading(false);
-                }
-            });
+            if (isMounted.current) {
+                setIsLoading(false);
+            }
         });
     }, []);
 
@@ -372,12 +397,12 @@ export default function LettersScreen() {
     useAnimatedReaction(
         () => Math.round(scrollY.value / SNAP),
         (idx) => {
-            if (letters.length === 0) return;
-            let wrappedIdx = idx % letters.length;
-            if (wrappedIdx < 0) wrappedIdx += letters.length;
+            if (deliveries.length === 0) return;
+            let wrappedIdx = idx % deliveries.length;
+            if (wrappedIdx < 0) wrappedIdx += deliveries.length;
             runOnJS(setFocusedIndex)(wrappedIdx);
         },
-        [letters.length]
+        [deliveries.length]
     );
 
     const tapGesture = Gesture.Tap()
@@ -385,7 +410,7 @@ export default function LettersScreen() {
         .maxDistance(25)
         .onEnd((e) => {
             'worklet';
-            if (letters.length === 0) return;
+            if (deliveries.length === 0) return;
 
             // Hit-test: only trigger if tap is within the card area (approximately)
             const centerX = screenWidth / 2;
@@ -398,9 +423,9 @@ export default function LettersScreen() {
 
             if (inBoundsX && inBoundsY) {
                 const rawIdx = Math.round(scrollY.value / SNAP);
-                let wrappedIdx = rawIdx % letters.length;
-                if (wrappedIdx < 0) wrappedIdx += letters.length;
-                runOnJS(openLetterWrapper)(wrappedIdx);
+                let wrappedIdx = rawIdx % deliveries.length;
+                if (wrappedIdx < 0) wrappedIdx += deliveries.length;
+                runOnJS(openDeliveryWrapper)(wrappedIdx);
             }
         });
 
@@ -412,7 +437,7 @@ export default function LettersScreen() {
             lockedAxis.value = 0;
         })
         .onUpdate((e) => {
-            if (letters.length <= 1) return;
+            if (deliveries.length <= 1) return;
 
             // Lock to dominant axis after threshold
             if (lockedAxis.value === 0) {
@@ -438,7 +463,7 @@ export default function LettersScreen() {
             }
         })
         .onEnd((e) => {
-            if (letters.length <= 1) return;
+            if (deliveries.length <= 1) return;
 
             // Project with velocity along the locked axis
             const velocity = lockedAxis.value === 1
@@ -458,14 +483,14 @@ export default function LettersScreen() {
 
     const RENDER_WINDOW = 6; // Easy to bump to 8 later if fast scrolling flashes
     const visibleCards = useMemo(() => {
-        if (letters.length <= RENDER_WINDOW * 2) return letters.map((_, i) => i);
+        if (deliveries.length <= RENDER_WINDOW * 2) return deliveries.map((_, i) => i);
         const indices: number[] = [];
         for (let offset = -RENDER_WINDOW; offset <= RENDER_WINDOW; offset++) {
-            const idx = ((focusedIndex + offset) % letters.length + letters.length) % letters.length;
+            const idx = ((focusedIndex + offset) % deliveries.length + deliveries.length) % deliveries.length;
             if (!indices.includes(idx)) indices.push(idx);
         }
         return indices;
-    }, [focusedIndex, letters.length]);
+    }, [focusedIndex, deliveries.length]);
 
     return (
         <View style={{ flex: 1, backgroundColor: BG_COLOR }}>
@@ -475,7 +500,7 @@ export default function LettersScreen() {
                     <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
                         <ActivityIndicator size="large" color="rgba(0,0,0,0.25)" />
                     </View>
-                ) : letters.length === 0 ? (
+                ) : deliveries.length === 0 ? (
                     <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
                         <Text style={{
                             fontFamily: 'Avenir Next',
@@ -484,27 +509,34 @@ export default function LettersScreen() {
                             textAlign: 'center',
                             paddingHorizontal: 40,
                         }}>
-                            {t('letters.empty')}
+                            {t('stack.empty')}
                         </Text>
                     </View>
                 ) : (
                     <GestureDetector gesture={composedGesture}>
                         <View style={{ flex: 1 }}>
                             <Reanimated.View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', transform: [{ perspective: 8000 }, { rotateX: '20deg' }] }}>
-                                {visibleCards.map((index) => (
-                                    <CardInPile
-                                        key={letters[index].id}
-                                        letter={letters[index]}
-                                        post={getPostForLetter(letters[index])}
-                                        index={index}
-                                        scrollY={scrollY}
-                                        exitDirX={exitDirX}
-                                        exitDirY={exitDirY}
-                                        totalCards={letters.length}
-                                        cardWidth={CARD_WIDTH}
-                                        cardHeight={CARD_HEIGHT}
-                                    />
-                                ))}
+                                {visibleCards.map((index) => {
+                                    const delivery = deliveries[index];
+                                    const post = getPostForDelivery(delivery);
+                                    // A card is "returning" if the current user created it
+                                    const isReturning = post?.sender_id === currentUser?.id;
+                                    return (
+                                        <CardInPile
+                                            key={delivery.id}
+                                            delivery={delivery}
+                                            post={post}
+                                            index={index}
+                                            scrollY={scrollY}
+                                            exitDirX={exitDirX}
+                                            exitDirY={exitDirY}
+                                            totalCards={deliveries.length}
+                                            cardWidth={CARD_WIDTH}
+                                            cardHeight={CARD_HEIGHT}
+                                            isReturning={!!isReturning}
+                                        />
+                                    );
+                                })}
                             </Reanimated.View>
                             <Text style={{
                                 position: 'absolute',
@@ -514,28 +546,19 @@ export default function LettersScreen() {
                                 fontSize: 13,
                                 color: 'rgba(0,0,0,0.2)',
                             }}>
-                                {focusedIndex + 1} / {letters.length}
+                                {focusedIndex + 1} / {deliveries.length}
                             </Text>
                         </View>
                     </GestureDetector>
                 )}
 
-                {!selectedLetter && (
+                {!selectedDelivery && (
                     <>
                         <GlassButton
-                            icon="settings-outline"
+                            icon="file-tray-outline"
                             onPress={() => {
                                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                                router.push('/(main)/settings' as any);
-                            }}
-                            style={{ position: 'absolute', top: insets.top + 12, left: 16 }}
-                        />
-
-                        <GlassButton
-                            icon="people-outline"
-                            onPress={() => {
-                                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                                router.push('/(main)/carnet' as any);
+                                router.push('/(main)/outbox' as any);
                             }}
                             style={{ position: 'absolute', top: insets.top + 12, right: 16 }}
                         />
@@ -572,14 +595,14 @@ export default function LettersScreen() {
                     </>
                 )}
 
-                {selectedLetter && (
+                {selectedDelivery && (
                     <PostcardInspector
-                        letter={selectedLetter}
-                        post={getPostForLetter(selectedLetter)}
+                        delivery={selectedDelivery}
+                        post={getPostForDelivery(selectedDelivery)}
                         senderName={senderName}
-                        onDismiss={closeLetter}
-                        onRepost={handleRepost}
-                        onDismissCard={handleDismissCard}
+                        onDismiss={closeDelivery}
+                        onRepost={() => handleRepost(selectedDelivery.id)}
+                        onDismissCard={() => handleDismissCard(selectedDelivery.id)}
                     />
                 )}
             </SafeAreaView>
@@ -589,7 +612,7 @@ export default function LettersScreen() {
                     <DualCameraCapture
                         onComplete={() => {
                             setShowCamera(false);
-                            syncLetters().catch(console.error);
+                            syncDeliveries().catch(console.error);
                         }}
                         onClose={() => setShowCamera(false)}
                     />

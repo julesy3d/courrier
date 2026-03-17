@@ -99,19 +99,19 @@ function useLightLayerValues(tiltX: SharedValue<number>, tiltY: SharedValue<numb
 
 // ── Props ───────────────────────────────────────────────────
 interface PostcardInspectorProps {
-    letter: any;
+    delivery: any | null;
     post: any;
     senderName: string;
     onDismiss: () => void;
-    mode?: 'inspect' | 'preview';
+    mode?: 'inspect' | 'preview' | 'outbox';
     onRetake?: () => void;
     onSend?: () => void;
-    onRepost?: (postId: string, letterId: string) => void;
-    onDismissCard?: (letterId: string) => void;
+    onRepost?: (deliveryId: string) => void;
+    onDismissCard?: (deliveryId: string) => void;
 }
 
 export default function PostcardInspector({
-    letter,
+    delivery,
     post,
     senderName,
     onDismiss,
@@ -128,6 +128,7 @@ export default function PostcardInspector({
 
     const [showComments, setShowComments] = useState(false);
     const [commentCount, setCommentCount] = useState(0);
+    const [hasSeenBack, setHasSeenBack] = useState(mode !== 'inspect');
 
     const fetchCommentCount = useCallback(() => {
         if (post?.id) {
@@ -177,6 +178,8 @@ export default function PostcardInspector({
     }));
 
     const handleRepostWithAnim = () => {
+        if (!delivery) return;
+
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
         exitTranslateY.value = withSpring(-screenHeight * 1.2, {
@@ -188,11 +191,13 @@ export default function PostcardInspector({
         overlayOpacity.value = withTiming(0, { duration: 400 });
 
         setTimeout(() => {
-            onRepost?.(post?.id, letter.id);
+            onRepost?.(delivery.id);
         }, 500);
     };
 
     const handleDismissWithAnim = () => {
+        if (!delivery) return;
+
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
         exitOpacity.value = withTiming(0, { duration: 300 });
@@ -207,7 +212,7 @@ export default function PostcardInspector({
 
         setTimeout(() => {
             overlayOpacity.value = withTiming(0, { duration: 200 }, (finished) => {
-                if (finished) runOnJS(onDismissCard!)(letter.id);
+                if (finished && delivery) runOnJS(onDismissCard!)(delivery.id);
             });
         }, 600);
     };
@@ -344,18 +349,22 @@ export default function PostcardInspector({
                 if (crossedForward || crossedBack) {
                     runOnJS(Haptics.impactAsync)(Haptics.ImpactFeedbackStyle.Light);
                 }
+                if (crossedForward) {
+                    runOnJS(setHasSeenBack)(true);
+                }
             }
         }
     );
 
     const { dateString, bottomOffset } = useMemo(() => {
-        const dateString = letter.sent_at
-            ? new Date(letter.sent_at).toLocaleDateString(undefined, { dateStyle: 'full' } as any)
+        const dateSource = delivery?.delivered_at || post?.sent_at;
+        const dateString = dateSource
+            ? new Date(dateSource).toLocaleDateString(undefined, { dateStyle: 'full' } as any)
             : '';
         const bottomOffset = cardTop + cardHeight + 20;
 
         return { dateString, bottomOffset };
-    }, [letter.sent_at, cardTop, cardHeight]);
+    }, [delivery?.delivered_at, post?.sent_at, cardTop, cardHeight]);
 
     const cardOrigin = useMemo(() => Skia.Point(CANVAS_PADDING + cardWidth / 2, CANVAS_PADDING + cardHeight / 2), [cardWidth, cardHeight]);
     const versoOrigin = useMemo(() => Skia.Point(cardWidth / 2, cardHeight / 2), [cardWidth, cardHeight]);
@@ -488,7 +497,7 @@ export default function PostcardInspector({
             )}
 
             {/* Comment icon — absolute top-right, inspect mode only */}
-            {mode === 'inspect' && (
+            {(mode === 'inspect' || mode === 'outbox') && hasSeenBack && (
                 <TouchableOpacity
                     onPress={() => {
                         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -664,60 +673,90 @@ export default function PostcardInspector({
                         </Text>
 
                         {/* Dismiss / Repost row */}
-                        <View style={{
-                            flexDirection: 'row',
-                            justifyContent: 'space-between',
-                            width: '100%',
-                            paddingHorizontal: 40,
-                            marginTop: 16,
-                        }}>
-                            {/* Dismiss — subtle, secondary */}
-                            <TouchableOpacity
-                                onPress={handleDismissWithAnim}
-                                style={{
-                                    flexDirection: 'row',
-                                    alignItems: 'center',
-                                    padding: 14,
-                                }}
-                            >
-                                <Ionicons name="trash-outline" size={18} color="rgba(250,249,246,0.5)" />
-                                <Text style={{
-                                    fontFamily: 'Avenir Next',
-                                    fontSize: 15,
-                                    fontWeight: '500',
-                                    color: 'rgba(250,249,246,0.5)',
-                                    marginLeft: 8,
-                                }}>
-                                    {t('inspect.dismiss' as any) || 'Dismiss'}
-                                </Text>
-                            </TouchableOpacity>
+                        {hasSeenBack && (
+                            <View style={{
+                                flexDirection: 'row',
+                                justifyContent: 'space-between',
+                                width: '100%',
+                                paddingHorizontal: 40,
+                                marginTop: 16,
+                            }}>
+                                {/* Dismiss — subtle, secondary */}
+                                <TouchableOpacity
+                                    onPress={handleDismissWithAnim}
+                                    style={{
+                                        flexDirection: 'row',
+                                        alignItems: 'center',
+                                        padding: 14,
+                                    }}
+                                >
+                                    <Ionicons name="trash-outline" size={18} color="rgba(250,249,246,0.5)" />
+                                    <Text style={{
+                                        fontFamily: 'Avenir Next',
+                                        fontSize: 15,
+                                        fontWeight: '500',
+                                        color: 'rgba(250,249,246,0.5)',
+                                        marginLeft: 8,
+                                    }}>
+                                        {t('inspect.dismiss' as any) || 'Dismiss'}
+                                    </Text>
+                                </TouchableOpacity>
 
-                            {/* Repost — glass pill */}
-                            <TouchableOpacity
-                                onPress={handleRepostWithAnim}
-                                style={{
-                                    flexDirection: 'row',
-                                    alignItems: 'center',
-                                    backgroundColor: 'rgba(255,255,255,0.15)',
-                                    borderRadius: 14,
-                                    paddingVertical: 14,
-                                    paddingHorizontal: 20,
-                                    borderWidth: StyleSheet.hairlineWidth,
-                                    borderColor: 'rgba(255,255,255,0.3)',
-                                }}
-                            >
-                                <Text style={{
-                                    fontFamily: 'Avenir Next',
-                                    fontSize: 15,
-                                    fontWeight: '500',
-                                    color: 'rgba(250,249,246,0.95)',
-                                    marginRight: 8,
-                                }}>
-                                    {t('inspect.repost' as any) || 'Repost'}
-                                </Text>
-                                <Ionicons name="arrow-redo-outline" size={18} color="rgba(250,249,246,0.95)" />
-                            </TouchableOpacity>
-                        </View>
+                                {/* Repost — glass pill */}
+                                <TouchableOpacity
+                                    onPress={handleRepostWithAnim}
+                                    style={{
+                                        flexDirection: 'row',
+                                        alignItems: 'center',
+                                        backgroundColor: 'rgba(255,255,255,0.15)',
+                                        borderRadius: 14,
+                                        paddingVertical: 14,
+                                        paddingHorizontal: 20,
+                                        borderWidth: StyleSheet.hairlineWidth,
+                                        borderColor: 'rgba(255,255,255,0.3)',
+                                    }}
+                                >
+                                    <Text style={{
+                                        fontFamily: 'Avenir Next',
+                                        fontSize: 15,
+                                        fontWeight: '500',
+                                        color: 'rgba(250,249,246,0.95)',
+                                        marginRight: 8,
+                                    }}>
+                                        {t('inspect.repost' as any) || 'Repost'}
+                                    </Text>
+                                    <Ionicons name="arrow-redo-outline" size={18} color="rgba(250,249,246,0.95)" />
+                                </TouchableOpacity>
+                            </View>
+                        )}
+                    </>
+                ) : mode === 'outbox' ? (
+                    <>
+                        {/* Outbox mode — show score and date, no action buttons */}
+                        <Text style={{
+                            fontFamily: 'Avenir Next',
+                            fontSize: 14,
+                            fontWeight: '600',
+                            color: '#FAF9F6',
+                            textAlign: 'center',
+                            textShadowColor: 'rgba(0,0,0,0.5)',
+                            textShadowOffset: { width: 0, height: 1 },
+                            textShadowRadius: 3,
+                        }}>
+                            {post?.score != null ? `${post.score} ${post.score === 1 ? 'person reached' : 'people reached'}` : ''}
+                        </Text>
+                        <Text style={{
+                            fontFamily: 'Avenir Next',
+                            fontSize: 12,
+                            fontWeight: '300',
+                            color: 'rgba(250,249,246,0.5)',
+                            marginTop: 4,
+                            textShadowColor: 'rgba(0,0,0,0.5)',
+                            textShadowOffset: { width: 0, height: 1 },
+                            textShadowRadius: 3,
+                        }}>
+                            {dateString}
+                        </Text>
                     </>
                 ) : (
                     /* Preview mode — Retake / Send buttons */
@@ -782,7 +821,7 @@ export default function PostcardInspector({
                 )}
             </View>
 
-            {mode === 'inspect' && showComments && post && (
+            {(mode === 'inspect' || mode === 'outbox') && showComments && post && (
                 <PostLogSheet
                     postId={post.id}
                     onClose={handleCloseComments}

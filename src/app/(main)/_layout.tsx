@@ -5,11 +5,9 @@ export default function MainLayout() {
         <Stack screenOptions={{ headerShown: false }}>
             <Stack.Screen name="index" />
             <Stack.Screen
-                name="carnet"
+                name="outbox"
                 options={{
-                    presentation: 'transparentModal',
-                    animation: 'fade',
-                    contentStyle: { backgroundColor: 'transparent' },
+                    animation: 'slide_from_right',
                 }}
             />
             <Stack.Screen

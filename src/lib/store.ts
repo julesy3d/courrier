@@ -16,6 +16,7 @@ export type AppUser = {
     lang: 'en' | 'fr';
     push_token: string | null;
     created_at: string;
+    last_active_at: string; // NEW
 };
 
 export type Post = {
@@ -24,17 +25,20 @@ export type Post = {
     recto_url: string;
     selfie_url: string | null;
     sent_at: string;
+    score: number;       // NEW — total nodes reached
+    body: string | null;  // NEW — null = photo card, non-null = text card
 };
 
-export type Letter = {
+export type Delivery = {
     id: string;
     post_id: string;
-    sender_id: string;
     recipient_id: string;
-    sent_at: string;
+    source_user_id: string;
+    source_delivery_id: string | null;
+    action: 'pending' | 'reposted' | 'dismissed';
+    delivered_at: string;
     opened_at: string | null;
-    notified: boolean;
-    dismissed_at: string | null;
+    acted_at: string | null;
 };
 
 export type Repost = {
@@ -64,12 +68,6 @@ export type LogEntry = {
     created_at: string;
 };
 
-export interface CarnetContact {
-    contactId: string;
-    muted: boolean;
-    addedAt: string;
-}
-
 // ═══════════════════════════════════════════════
 // STORE INTERFACE
 // ═══════════════════════════════════════════════
@@ -88,32 +86,25 @@ interface PostcardsStore {
     localeOverride: 'en' | 'fr' | null;
     setLocaleOverride: (lang: 'en' | 'fr' | null) => void;
 
-    // --- Letters + Posts ---
-    cachedLetters: Letter[];
+    // --- Deliveries + Posts ---
+    cachedDeliveries: Delivery[];
     cachedPosts: Record<string, Post>;
     cachedSenderMap: Record<string, string>;
     isSyncing: boolean;
-    syncLetters: () => Promise<Letter[]>;
-    markLetterOpened: (letterId: string) => Promise<void>;
-    getPostForLetter: (letter: Letter) => Post | undefined;
+    syncDeliveries: () => Promise<Delivery[]>;
+    markDeliveryOpened: (deliveryId: string) => Promise<void>;
+    getPostForDelivery: (delivery: Delivery) => Post | undefined;
 
-    // --- Carnet ---
-    carnet: CarnetContact[];
-    addContacts: (contactIds: string[]) => Promise<void>;
-    removeContact: (contactId: string) => Promise<void>;
-    toggleMute: (contactId: string) => Promise<void>;
-    syncCarnet: () => Promise<void>;
-    getActiveCarnetIds: () => string[];
-
-    // --- Broadcast ---
-    broadcastPostcard: (params: {
-        rectoUrl: string;
-        selfieUrl: string | null;
-    }) => Promise<string>;  // returns post_id
+    // --- Create ---
+    createPostcard: (params: {
+        rectoUrl?: string;
+        selfieUrl?: string | null;
+        body?: string;
+    }) => Promise<string>;
 
     // --- Repost / Dismiss ---
-    repostPostcard: (postId: string, letterId: string) => Promise<void>;
-    dismissPostcard: (letterId: string) => Promise<void>;
+    repostCard: (deliveryId: string) => Promise<void>;
+    dismissCard: (deliveryId: string) => Promise<void>;
     fetchPostLog: (postId: string) => Promise<Array<{
         id: string;
         type: 'repost' | 'comment';
@@ -127,9 +118,12 @@ interface PostcardsStore {
     fetchComments: (postId: string) => Promise<Comment[]>;
     addComment: (postId: string, body: string) => Promise<Comment>;
 
-    // --- Onboarding ---
-    hasPostedFirst: boolean;
-    setHasPostedFirst: (value: boolean) => void;
+    // --- Outbox ---
+    cachedOutbox: Post[];
+    fetchOutbox: () => Promise<void>;
+
+    // --- Heartbeat ---
+    heartbeat: () => Promise<void>;
 }
 
 // ═══════════════════════════════════════════════
@@ -143,12 +137,11 @@ export const useStore = create<PostcardsStore>()(
             currentUser: null,
             isLoading: true,
             localeOverride: null,
-            cachedLetters: [],
+            cachedDeliveries: [],
             cachedPosts: {},
             cachedSenderMap: {},
             isSyncing: false,
-            carnet: [],
-            hasPostedFirst: false,
+            cachedOutbox: [],
 
             // --- Auth (unchanged) ---
             signInAnonymously: async () => {
@@ -228,50 +221,48 @@ export const useStore = create<PostcardsStore>()(
             // --- Locale ---
             setLocaleOverride: (lang) => set({ localeOverride: lang }),
 
-            // --- Letters + Posts ---
-            syncLetters: async () => {
+            // --- Deliveries + Posts ---
+            syncDeliveries: async () => {
                 if (get().isSyncing) return [];
                 set({ isSyncing: true });
 
-                const { currentUser, cachedLetters, cachedPosts, cachedSenderMap } = get();
+                const { currentUser, cachedDeliveries, cachedPosts, cachedSenderMap } = get();
                 if (!currentUser) {
                     set({ isSyncing: false });
                     return [];
                 }
 
                 try {
-                    // 1. High-water mark on sent_at
-                    const lastSentAt = cachedLetters.reduce((max, l) => {
-                        return l.sent_at > max ? l.sent_at : max;
+                    // High-water mark on delivered_at
+                    const lastDeliveredAt = cachedDeliveries.reduce((max, d) => {
+                        return d.delivered_at > max ? d.delivered_at : max;
                     }, currentUser.created_at);
 
-                    // 2. Fetch new letters with their posts in one query
+                    // Fetch new pending deliveries with their posts
                     const { data: rows, error } = await supabase
-                        .from('letters')
+                        .from('deliveries')
                         .select('*, post:posts(*)')
                         .eq('recipient_id', currentUser.id)
-                        .gt('sent_at', lastSentAt)
-                        .is('dismissed_at', null)
-                        .order('sent_at', { ascending: false });
+                        .eq('action', 'pending')
+                        .gt('delivered_at', lastDeliveredAt)
+                        .order('delivered_at', { ascending: false });
 
                     if (error) throw error;
                     if (!rows || rows.length === 0) return [];
 
-                    // 3. Separate letters from posts
+                    // Separate deliveries from posts
                     const newPosts = { ...cachedPosts };
-                    const newLetters: Letter[] = rows.map((row: any) => {
-                        // Extract and cache the post
+                    const newDeliveries: Delivery[] = rows.map((row: any) => {
                         if (row.post) {
                             newPosts[row.post.id] = row.post as Post;
                         }
-                        // Return the letter without the joined post
-                        const { post, ...letter } = row;
-                        return letter as Letter;
+                        const { post, ...delivery } = row;
+                        return delivery as Delivery;
                     });
 
-                    // 4. Fetch missing sender display names
+                    // Fetch missing sender display names (source_user_id = who sent/reposted it to you)
                     const senderMap = { ...cachedSenderMap };
-                    const newSenderIds = [...new Set(newLetters.map(l => l.sender_id))]
+                    const newSenderIds = [...new Set(newDeliveries.map(d => d.source_user_id))]
                         .filter(id => !senderMap[id]);
 
                     if (newSenderIds.length > 0) {
@@ -285,16 +276,33 @@ export const useStore = create<PostcardsStore>()(
                         }
                     }
 
-                    // 5. Merge, deduplicate, sort
-                    const existingIds = new Set(cachedLetters.map(l => l.id));
-                    const trulyNew = newLetters.filter(l => !existingIds.has(l.id));
+                    // Also cache the post creators' names
+                    const creatorIds = [...new Set(
+                        newDeliveries
+                            .map(d => newPosts[d.post_id]?.sender_id)
+                            .filter((id): id is string => !!id && !senderMap[id])
+                    )];
 
-                    const combined = [...trulyNew, ...cachedLetters]
-                        .sort((a, b) => new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime());
+                    if (creatorIds.length > 0) {
+                        const { data: creators } = await supabase
+                            .from('users')
+                            .select('id, display_name')
+                            .in('id', creatorIds);
 
-                    // 6. Persist
+                        if (creators) {
+                            creators.forEach((s: any) => { senderMap[s.id] = s.display_name; });
+                        }
+                    }
+
+                    // Merge, deduplicate, sort
+                    const existingIds = new Set(cachedDeliveries.map(d => d.id));
+                    const trulyNew = newDeliveries.filter(d => !existingIds.has(d.id));
+
+                    const combined = [...trulyNew, ...cachedDeliveries]
+                        .sort((a, b) => new Date(b.delivered_at).getTime() - new Date(a.delivered_at).getTime());
+
                     set({
-                        cachedLetters: combined,
+                        cachedDeliveries: combined,
                         cachedPosts: newPosts,
                         cachedSenderMap: senderMap,
                     });
@@ -308,111 +316,31 @@ export const useStore = create<PostcardsStore>()(
                 }
             },
 
-            markLetterOpened: async (letterId: string) => {
+            markDeliveryOpened: async (deliveryId: string) => {
                 const { error } = await supabase
-                    .from('letters')
+                    .from('deliveries')
                     .update({ opened_at: new Date().toISOString() })
-                    .eq('id', letterId);
+                    .eq('id', deliveryId);
 
                 if (error) throw error;
 
                 set({
-                    cachedLetters: get().cachedLetters.map(l =>
-                        l.id === letterId ? { ...l, opened_at: new Date().toISOString() } : l
+                    cachedDeliveries: get().cachedDeliveries.map(d =>
+                        d.id === deliveryId ? { ...d, opened_at: new Date().toISOString() } : d
                     ),
                 });
             },
 
-            getPostForLetter: (letter: Letter) => {
-                return get().cachedPosts[letter.post_id];
+            getPostForDelivery: (delivery: Delivery) => {
+                return get().cachedPosts[delivery.post_id];
             },
 
-            // --- Carnet (unchanged) ---
-            addContacts: async (contactIds: string[]) => {
-                const { currentUser, carnet } = get();
-                if (!currentUser) return;
-
-                const rows = contactIds.map(id => ({ owner_id: currentUser.id, contact_id: id }));
-                const { error } = await supabase
-                    .from('carnet')
-                    .upsert(rows, { onConflict: 'owner_id,contact_id' });
-
-                if (error) throw error;
-
-                const newCarnet = [...carnet];
-                const now = new Date().toISOString();
-                for (const id of contactIds) {
-                    if (!newCarnet.find(c => c.contactId === id)) {
-                        newCarnet.push({ contactId: id, muted: false, addedAt: now });
-                    }
-                }
-                set({ carnet: newCarnet });
-            },
-
-            removeContact: async (contactId: string) => {
-                const { currentUser, carnet } = get();
-                if (!currentUser) return;
-
-                const { error } = await supabase
-                    .from('carnet')
-                    .delete()
-                    .match({ owner_id: currentUser.id, contact_id: contactId });
-
-                if (error) throw error;
-                set({ carnet: carnet.filter(c => c.contactId !== contactId) });
-            },
-
-            toggleMute: async (contactId: string) => {
-                const { currentUser, carnet } = get();
-                if (!currentUser) return;
-
-                const contact = carnet.find(c => c.contactId === contactId);
-                if (!contact) return;
-
-                const newMuted = !contact.muted;
-                const { error } = await supabase
-                    .from('carnet')
-                    .update({ muted: newMuted })
-                    .match({ owner_id: currentUser.id, contact_id: contactId });
-
-                if (error) throw error;
-                set({
-                    carnet: carnet.map(c =>
-                        c.contactId === contactId ? { ...c, muted: newMuted } : c
-                    ),
-                });
-            },
-
-            syncCarnet: async () => {
-                const { currentUser } = get();
-                if (!currentUser) return;
-
-                const { data, error } = await supabase
-                    .from('carnet')
-                    .select('contact_id, muted, created_at')
-                    .order('created_at', { ascending: true });
-
-                if (error) throw error;
-                if (data) {
-                    set({
-                        carnet: data.map(row => ({
-                            contactId: row.contact_id,
-                            muted: row.muted,
-                            addedAt: row.created_at,
-                        })),
-                    });
-                }
-            },
-
-            getActiveCarnetIds: () => {
-                return get().carnet.filter(c => !c.muted).map(c => c.contactId);
-            },
-
-            // --- Broadcast ---
-            broadcastPostcard: async (params) => {
-                const { error, data } = await supabase.rpc('broadcast_postcard', {
-                    p_recto_url: params.rectoUrl,
-                    p_selfie_url: params.selfieUrl,
+            // --- Create ---
+            createPostcard: async (params) => {
+                const { data, error } = await supabase.rpc('create_postcard', {
+                    p_recto_url: params.rectoUrl || null,
+                    p_selfie_url: params.selfieUrl || null,
+                    p_body: params.body || null,
                 });
 
                 if (error) throw error;
@@ -420,21 +348,47 @@ export const useStore = create<PostcardsStore>()(
             },
 
             // --- Repost / Dismiss ---
-            repostPostcard: async (postId: string, letterId: string) => {
-                const { error } = await supabase.rpc('repost_postcard', { p_post_id: postId });
+            repostCard: async (deliveryId: string) => {
+                const { error } = await supabase.rpc('repost_card', {
+                    p_delivery_id: deliveryId,
+                });
                 if (error) throw error;
-                const filtered = get().cachedLetters.filter(l => l.id !== letterId);
-                set({ cachedLetters: filtered });
+
+                set({
+                    cachedDeliveries: get().cachedDeliveries.filter(d => d.id !== deliveryId),
+                });
             },
 
-            dismissPostcard: async (letterId: string) => {
-                const { error } = await supabase
-                    .from('letters')
-                    .update({ dismissed_at: new Date().toISOString() })
-                    .eq('id', letterId);
+            dismissCard: async (deliveryId: string) => {
+                const { error } = await supabase.rpc('dismiss_card', {
+                    p_delivery_id: deliveryId,
+                });
                 if (error) throw error;
-                const filtered = get().cachedLetters.filter(l => l.id !== letterId);
-                set({ cachedLetters: filtered });
+
+                set({
+                    cachedDeliveries: get().cachedDeliveries.filter(d => d.id !== deliveryId),
+                });
+            },
+
+            // --- Outbox ---
+            fetchOutbox: async () => {
+                const { currentUser } = get();
+                if (!currentUser) return;
+
+                const { data, error } = await supabase
+                    .from('posts')
+                    .select('*')
+                    .eq('sender_id', currentUser.id)
+                    .order('sent_at', { ascending: false });
+
+                if (error) throw error;
+                set({ cachedOutbox: (data || []) as Post[] });
+            },
+
+            // --- Heartbeat ---
+            heartbeat: async () => {
+                const { error } = await supabase.rpc('heartbeat');
+                if (error) console.error('Heartbeat failed', error);
             },
 
             fetchPostLog: async (postId: string) => {
@@ -514,18 +468,15 @@ export const useStore = create<PostcardsStore>()(
                 } as Comment;
             },
 
-            // --- Onboarding ---
-            setHasPostedFirst: (value: boolean) => set({ hasPostedFirst: value }),
         }),
         {
             name: 'postcards-storage',  // NEW key — won't conflict with old 'postal-storage'
             storage: createJSONStorage(() => AsyncStorage),
             partialize: (state) => ({
-                cachedLetters: state.cachedLetters,
+                cachedDeliveries: state.cachedDeliveries,
                 cachedPosts: state.cachedPosts,
                 cachedSenderMap: state.cachedSenderMap,
-                carnet: state.carnet,
-                hasPostedFirst: state.hasPostedFirst,
+                cachedOutbox: state.cachedOutbox,
             }),
         }
     )

@@ -36,7 +36,7 @@ interface DualCameraCaptureProps {
 export default function DualCameraCapture({ onComplete, onClose }: DualCameraCaptureProps) {
     const insets = useSafeAreaInsets();
     const { t } = useTranslation();
-    const { currentUser, broadcastPostcard, setHasPostedFirst, hasPostedFirst } = useStore();
+    const { currentUser, createPostcard } = useStore();
     const [permission, requestPermission] = useCameraPermissions();
 
     const cameraRef = useRef<CameraView>(null);
@@ -169,11 +169,7 @@ export default function DualCameraCapture({ onComplete, onClose }: DualCameraCap
                 );
             }
 
-            await broadcastPostcard({ rectoUrl, selfieUrl });
-
-            if (!hasPostedFirst) {
-                setHasPostedFirst(true);
-            }
+            await createPostcard({ rectoUrl, selfieUrl });
 
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
             setPhase('done');
@@ -272,8 +268,8 @@ export default function DualCameraCapture({ onComplete, onClose }: DualCameraCap
             {phase === 'preview' && capturedRectoUri && (
                 <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.9)', zIndex: 100 }]}>
                     <PostcardInspector
-                        letter={{ id: 'preview', sent_at: new Date().toISOString(), opened_at: null }}
-                        post={{ id: 'preview', recto_url: capturedRectoUri, selfie_url: capturedSelfieUri }}
+                        delivery={{ id: 'preview', delivered_at: new Date().toISOString(), opened_at: null }}
+                        post={{ id: 'preview', recto_url: capturedRectoUri, selfie_url: capturedSelfieUri, score: 0, body: null, sender_id: currentUser?.id || '', sent_at: new Date().toISOString() }}
                         senderName={currentUser?.display_name || ''}
                         onDismiss={() => {
                             setCapturedRectoUri(null);
