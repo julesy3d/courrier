@@ -113,6 +113,15 @@ const en = {
     'capture.send': 'Send',
     'capture.flipHint': 'Tap to flip',
     'capture.posting': 'Posting...',
+
+    // Inspect — repost / dismiss
+    'inspect.repost': 'Repost',
+    'inspect.dismiss': 'Dismiss',
+
+    // Post Log
+    'log.title': 'Log',
+    'log.reposted': 'reposted',
+    'log.empty': 'No activity yet.',
 };
 
 const fr = {
@@ -226,6 +235,15 @@ const fr = {
     'capture.send': 'Envoyer',
     'capture.flipHint': 'Touche pour retourner',
     'capture.posting': 'Envoi en cours...',
+
+    // Inspect — repost / dismiss
+    'inspect.repost': 'Reposter',
+    'inspect.dismiss': 'Ignorer',
+
+    // Post Log
+    'log.title': 'Journal',
+    'log.reposted': 'a renvoyé',
+    'log.empty': 'Aucune activité.',
 };
 
 const translations = { en, fr };

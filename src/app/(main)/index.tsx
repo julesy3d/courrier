@@ -264,7 +264,7 @@ function GlassButton({ onPress, icon, size = 40, style }: {
 }
 
 export default function LettersScreen() {
-    const { markLetterOpened, currentUser, cachedLetters: letters, cachedSenderMap: senderMap, cachedPosts, getPostForLetter, syncLetters, syncCarnet } = useStore();
+    const { markLetterOpened, currentUser, cachedLetters: letters, cachedSenderMap: senderMap, cachedPosts, getPostForLetter, syncLetters, syncCarnet, repostPostcard, dismissPostcard } = useStore();
     const [isLoading, setIsLoading] = useState(true);
     const isMounted = useRef(true);
 
@@ -323,6 +323,25 @@ export default function LettersScreen() {
     const closeLetter = () => {
         setSelectedLetter(null);
         setSenderName('');
+    };
+
+    const handleRepost = async (postId: string, letterId: string) => {
+        try {
+            await repostPostcard(postId, letterId);
+            closeLetter();
+        } catch (e) {
+            console.error('Repost failed', e);
+            Alert.alert('Error', 'Could not repost. Try again.');
+        }
+    };
+
+    const handleDismissCard = async (letterId: string) => {
+        try {
+            await dismissPostcard(letterId);
+            closeLetter();
+        } catch (e) {
+            console.error('Dismiss failed', e);
+        }
     };
 
 
@@ -559,6 +578,8 @@ export default function LettersScreen() {
                         post={getPostForLetter(selectedLetter)}
                         senderName={senderName}
                         onDismiss={closeLetter}
+                        onRepost={handleRepost}
+                        onDismissCard={handleDismissCard}
                     />
                 )}
             </SafeAreaView>

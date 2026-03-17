@@ -4,35 +4,35 @@ import {
     Canvas,
     Group,
     Image,
+    LinearGradient,
+    RadialGradient,
     Rect,
     RoundedRect,
     Skia,
     useImage,
-    LinearGradient,
-    RadialGradient,
     vec,
 } from '@shopify/react-native-skia';
 import * as Haptics from 'expo-haptics';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Dimensions, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import CommentsSheet from './CommentsSheet';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Reanimated, {
     runOnJS,
+    SharedValue,
     useAnimatedReaction,
     useAnimatedStyle,
     useDerivedValue,
     useSharedValue,
     withSpring,
     withTiming,
-    SharedValue,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from '../lib/i18n';
 import {
     IMAGE_INSET,
 } from '../lib/postcardLayout';
-import { Comment, useStore } from '../lib/store';
+import { useStore } from '../lib/store';
+import PostLogSheet from './PostLogSheet';
 
 // ── Dimensions ──────────────────────────────────────────────
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
@@ -106,6 +106,8 @@ interface PostcardInspectorProps {
     mode?: 'inspect' | 'preview';
     onRetake?: () => void;
     onSend?: () => void;
+    onRepost?: (postId: string, letterId: string) => void;
+    onDismissCard?: (letterId: string) => void;
 }
 
 export default function PostcardInspector({
@@ -116,6 +118,8 @@ export default function PostcardInspector({
     mode = 'inspect',
     onRetake,
     onSend,
+    onRepost,
+    onDismissCard,
 }: PostcardInspectorProps) {
     const { t, locale } = useTranslation();
     const insets = useSafeAreaInsets();
@@ -127,9 +131,9 @@ export default function PostcardInspector({
 
     const fetchCommentCount = useCallback(() => {
         if (post?.id) {
-            useStore.getState().fetchComments(post.id)
-                .then((comments: Comment[]) => setCommentCount(comments.length))
-                .catch(() => {});
+            useStore.getState().fetchPostLog(post.id)
+                .then((entries) => setCommentCount(entries.length))
+                .catch(() => { });
         }
     }, [post?.id]);
 
@@ -156,6 +160,57 @@ export default function PostcardInspector({
     };
 
     const overlayStyle = useAnimatedStyle(() => ({ opacity: overlayOpacity.value }));
+
+    // ── Exit animation state ──────────────────────────────────
+    const exitTranslateY = useSharedValue(0);
+    const exitScale = useSharedValue(1);
+    const exitOpacity = useSharedValue(1);
+    const [showParticles, setShowParticles] = useState(false);
+    const [particleOrigin, setParticleOrigin] = useState({ x: 0, y: 0, w: 0, h: 0 });
+
+    const exitAnimStyle = useAnimatedStyle(() => ({
+        transform: [
+            { translateY: exitTranslateY.value },
+            { scale: exitScale.value },
+        ],
+        opacity: exitOpacity.value,
+    }));
+
+    const handleRepostWithAnim = () => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+        exitTranslateY.value = withSpring(-screenHeight * 1.2, {
+            damping: 18,
+            stiffness: 90,
+            mass: 0.6,
+        });
+        exitScale.value = withTiming(0.7, { duration: 500 });
+        overlayOpacity.value = withTiming(0, { duration: 400 });
+
+        setTimeout(() => {
+            onRepost?.(post?.id, letter.id);
+        }, 500);
+    };
+
+    const handleDismissWithAnim = () => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+        exitOpacity.value = withTiming(0, { duration: 300 });
+
+        setParticleOrigin({
+            x: cardLeft,
+            y: cardTop,
+            w: cardWidth,
+            h: cardHeight,
+        });
+        setShowParticles(true);
+
+        setTimeout(() => {
+            overlayOpacity.value = withTiming(0, { duration: 200 }, (finished) => {
+                if (finished) runOnJS(onDismissCard!)(letter.id);
+            });
+        }, 600);
+    };
 
     const CANVAS_PADDING = 80;
     const canvasWidth = cardWidth + CANVAS_PADDING * 2;
@@ -432,15 +487,47 @@ export default function PostcardInspector({
                 </TouchableOpacity>
             )}
 
+            {/* Comment icon — absolute top-right, inspect mode only */}
+            {mode === 'inspect' && (
+                <TouchableOpacity
+                    onPress={() => {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        setShowComments(true);
+                    }}
+                    style={{
+                        position: 'absolute',
+                        top: insets.top + 12,
+                        right: 16,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        padding: 8,
+                        zIndex: 10,
+                    }}
+                >
+                    <Ionicons name="chatbubble-outline" size={20} color="rgba(250,249,246,0.8)" />
+                    {commentCount > 0 && (
+                        <Text style={{
+                            fontFamily: 'Avenir Next',
+                            fontSize: 13,
+                            fontWeight: '500',
+                            color: 'rgba(250,249,246,0.8)',
+                            marginLeft: 4,
+                        }}>
+                            {commentCount}
+                        </Text>
+                    )}
+                </TouchableOpacity>
+            )}
+
             {/* Card — Skia Canvas with gesture */}
             <GestureDetector gesture={composedGesture}>
-                <View style={{
+                <Reanimated.View style={[{
                     position: 'absolute',
                     top: cardTop - CANVAS_PADDING,
                     left: cardLeft - CANVAS_PADDING,
                     width: canvasWidth,
                     height: canvasHeight,
-                }}>
+                }, exitAnimStyle]}>
                     <Canvas style={{ flex: 1 }}>
                         {/* ── Shadow ── */}
                         <Group transform={shadowTransform}>
@@ -536,8 +623,10 @@ export default function PostcardInspector({
                             </Group>
                         </Group>
                     </Canvas>
-                </View>
+                </Reanimated.View>
             </GestureDetector>
+
+            {showParticles && <DismissParticles origin={particleOrigin} />}
 
             {/* Sender name + comment button / or Preview actions — below card */}
             <View style={{
@@ -574,32 +663,61 @@ export default function PostcardInspector({
                             {dateString}
                         </Text>
 
-                        {/* Comment button */}
-                        <TouchableOpacity
-                            onPress={() => {
-                                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                                setShowComments(true);
-                            }}
-                            style={{
-                                flexDirection: 'row',
-                                alignItems: 'center',
-                                marginTop: 16,
-                                padding: 10,
-                            }}
-                        >
-                            <Ionicons name="chatbubble-outline" size={20} color="rgba(250,249,246,0.8)" />
-                            {commentCount > 0 && (
+                        {/* Dismiss / Repost row */}
+                        <View style={{
+                            flexDirection: 'row',
+                            justifyContent: 'space-between',
+                            width: '100%',
+                            paddingHorizontal: 40,
+                            marginTop: 16,
+                        }}>
+                            {/* Dismiss — subtle, secondary */}
+                            <TouchableOpacity
+                                onPress={handleDismissWithAnim}
+                                style={{
+                                    flexDirection: 'row',
+                                    alignItems: 'center',
+                                    padding: 14,
+                                }}
+                            >
+                                <Ionicons name="trash-outline" size={18} color="rgba(250,249,246,0.5)" />
                                 <Text style={{
                                     fontFamily: 'Avenir Next',
-                                    fontSize: 13,
+                                    fontSize: 15,
                                     fontWeight: '500',
-                                    color: 'rgba(250,249,246,0.8)',
-                                    marginLeft: 6,
+                                    color: 'rgba(250,249,246,0.5)',
+                                    marginLeft: 8,
                                 }}>
-                                    {commentCount}
+                                    {t('inspect.dismiss' as any) || 'Dismiss'}
                                 </Text>
-                            )}
-                        </TouchableOpacity>
+                            </TouchableOpacity>
+
+                            {/* Repost — glass pill */}
+                            <TouchableOpacity
+                                onPress={handleRepostWithAnim}
+                                style={{
+                                    flexDirection: 'row',
+                                    alignItems: 'center',
+                                    backgroundColor: 'rgba(255,255,255,0.15)',
+                                    borderRadius: 14,
+                                    paddingVertical: 14,
+                                    paddingHorizontal: 20,
+                                    borderWidth: StyleSheet.hairlineWidth,
+                                    borderColor: 'rgba(255,255,255,0.3)',
+                                }}
+                            >
+                                <Text style={{
+                                    fontFamily: 'Avenir Next',
+                                    fontSize: 15,
+                                    fontWeight: '500',
+                                    color: 'rgba(250,249,246,0.95)',
+                                    marginRight: 8,
+                                }}>
+                                    {t('inspect.repost' as any) || 'Repost'}
+                                </Text>
+                                <Ionicons name="arrow-redo-outline" size={18} color="rgba(250,249,246,0.95)" />
+                            </TouchableOpacity>
+                        </View>
                     </>
                 ) : (
                     /* Preview mode — Retake / Send buttons */
@@ -665,11 +783,89 @@ export default function PostcardInspector({
             </View>
 
             {mode === 'inspect' && showComments && post && (
-                <CommentsSheet
+                <PostLogSheet
                     postId={post.id}
                     onClose={handleCloseComments}
                 />
             )}
         </Reanimated.View>
     );
+}
+
+// ── Dismiss particles ──────────────────────────────────────────
+
+const PARTICLE_COLS = 6;
+const PARTICLE_ROWS = 8;
+
+function DismissParticles({ origin }: { origin: { x: number; y: number; w: number; h: number } }) {
+    const particles = useMemo(() => {
+        const list = [];
+        const pw = origin.w / PARTICLE_COLS;
+        const ph = origin.h / PARTICLE_ROWS;
+        for (let row = 0; row < PARTICLE_ROWS; row++) {
+            for (let col = 0; col < PARTICLE_COLS; col++) {
+                list.push({
+                    key: `${row}-${col}`,
+                    x: origin.x + col * pw,
+                    y: origin.y + row * ph,
+                    w: pw + 1, // +1 to avoid hairline gaps
+                    h: ph + 1,
+                    delay: Math.random() * 300,
+                    driftX: (Math.random() - 0.5) * 120,
+                    driftY: (Math.random() - 0.5) * 80 - 30, // slight upward bias
+                    rotation: (Math.random() - 0.5) * 40,
+                });
+            }
+        }
+        return list;
+    }, [origin]);
+
+    return (
+        <>
+            {particles.map(({ key, ...p }) => (
+                <DismissChunk key={key} {...p} />
+            ))}
+        </>
+    );
+}
+
+function DismissChunk({ x, y, w, h, delay, driftX, driftY, rotation }: {
+    x: number; y: number; w: number; h: number;
+    delay: number; driftX: number; driftY: number; rotation: number;
+}) {
+    const opacity = useSharedValue(1);
+    const translateX = useSharedValue(0);
+    const translateY = useSharedValue(0);
+    const rotate = useSharedValue(0);
+    const scale = useSharedValue(1);
+
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            translateX.value = withTiming(driftX, { duration: 600 });
+            translateY.value = withTiming(driftY, { duration: 600 });
+            rotate.value = withTiming(rotation, { duration: 600 });
+            scale.value = withTiming(0.3, { duration: 600 });
+            opacity.value = withTiming(0, { duration: 600 });
+        }, delay);
+        return () => clearTimeout(timer);
+    }, []);
+
+    const style = useAnimatedStyle(() => ({
+        position: 'absolute',
+        left: x,
+        top: y,
+        width: w,
+        height: h,
+        backgroundColor: '#F5F2EE',
+        borderRadius: 2,
+        opacity: opacity.value,
+        transform: [
+            { translateX: translateX.value },
+            { translateY: translateY.value },
+            { rotate: `${rotate.value}deg` },
+            { scale: scale.value },
+        ],
+    }));
+
+    return <Reanimated.View style={style} />;
 }

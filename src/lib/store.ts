@@ -34,6 +34,15 @@ export type Letter = {
     sent_at: string;
     opened_at: string | null;
     notified: boolean;
+    dismissed_at: string | null;
+};
+
+export type Repost = {
+    id: string;
+    post_id: string;
+    user_id: string;
+    created_at: string;
+    user_name?: string; // joined from users table when fetching
 };
 
 export type Comment = {
@@ -44,6 +53,15 @@ export type Comment = {
     created_at: string;
     // Joined from users table when fetching
     author_name?: string;
+};
+
+export type LogEntry = {
+    id: string;
+    type: 'repost' | 'comment';
+    user_name: string;
+    user_id: string;
+    body?: string;
+    created_at: string;
 };
 
 export interface CarnetContact {
@@ -92,6 +110,18 @@ interface PostcardsStore {
         rectoUrl: string;
         selfieUrl: string | null;
     }) => Promise<string>;  // returns post_id
+
+    // --- Repost / Dismiss ---
+    repostPostcard: (postId: string, letterId: string) => Promise<void>;
+    dismissPostcard: (letterId: string) => Promise<void>;
+    fetchPostLog: (postId: string) => Promise<Array<{
+        id: string;
+        type: 'repost' | 'comment';
+        user_name: string;
+        user_id: string;
+        body?: string;
+        created_at: string;
+    }>>;
 
     // --- Comments (not persisted) ---
     fetchComments: (postId: string) => Promise<Comment[]>;
@@ -221,6 +251,7 @@ export const useStore = create<PostcardsStore>()(
                         .select('*, post:posts(*)')
                         .eq('recipient_id', currentUser.id)
                         .gt('sent_at', lastSentAt)
+                        .is('dismissed_at', null)
                         .order('sent_at', { ascending: false });
 
                     if (error) throw error;
@@ -386,6 +417,59 @@ export const useStore = create<PostcardsStore>()(
 
                 if (error) throw error;
                 return data as string; // post_id UUID
+            },
+
+            // --- Repost / Dismiss ---
+            repostPostcard: async (postId: string, letterId: string) => {
+                const { error } = await supabase.rpc('repost_postcard', { p_post_id: postId });
+                if (error) throw error;
+                const filtered = get().cachedLetters.filter(l => l.id !== letterId);
+                set({ cachedLetters: filtered });
+            },
+
+            dismissPostcard: async (letterId: string) => {
+                const { error } = await supabase
+                    .from('letters')
+                    .update({ dismissed_at: new Date().toISOString() })
+                    .eq('id', letterId);
+                if (error) throw error;
+                const filtered = get().cachedLetters.filter(l => l.id !== letterId);
+                set({ cachedLetters: filtered });
+            },
+
+            fetchPostLog: async (postId: string) => {
+                const [{ data: reposts }, { data: comments }] = await Promise.all([
+                    supabase
+                        .from('reposts')
+                        .select('id, user_id, created_at, user:users(display_name)')
+                        .eq('post_id', postId)
+                        .order('created_at', { ascending: true }),
+                    supabase
+                        .from('comments')
+                        .select('id, author_id, body, created_at, author:users(display_name)')
+                        .eq('post_id', postId)
+                        .order('created_at', { ascending: true }),
+                ]);
+
+                const repostEntries = (reposts || []).map((r: any) => ({
+                    id: r.id,
+                    type: 'repost' as const,
+                    user_name: r.user?.display_name || 'Unknown',
+                    user_id: r.user_id,
+                    created_at: r.created_at,
+                }));
+
+                const commentEntries = (comments || []).map((c: any) => ({
+                    id: c.id,
+                    type: 'comment' as const,
+                    user_name: c.author?.display_name || 'Unknown',
+                    user_id: c.author_id,
+                    body: c.body,
+                    created_at: c.created_at,
+                }));
+
+                return [...repostEntries, ...commentEntries]
+                    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
             },
 
             // --- Comments (not persisted — fetched fresh) ---
