@@ -3,6 +3,7 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { registerForPushNotifications } from './notifications';
 import { supabase } from './supabase';
+import { prefetchMatchupVideos } from './videoCache';
 
 // ═══════════════════════════════════════════════
 // TYPES
@@ -12,41 +13,65 @@ export type AppUser = {
     id: string;
     auth_id: string;
     display_name: string;
-    phone_hash: string | null;
-    lang: 'en' | 'fr';
     push_token: string | null;
+    lang: 'en' | 'fr';
+    achievements: Achievement[];
     created_at: string;
-    last_active_at: string; // NEW
+    last_active_at: string;
 };
 
-export type Post = {
-    id: string;
-    sender_id: string;
-    recto_url: string;
-    selfie_url: string | null;
-    sent_at: string;
-    score: number;       // NEW — total nodes reached
-    body: string | null;  // NEW — null = photo card, non-null = text card
+export type Achievement = {
+    type: string;
+    emoji?: string;
+    day?: string;
+    awarded_at: string;
 };
 
-export type Delivery = {
-    id: string;
-    post_id: string;
-    recipient_id: string;
-    source_user_id: string;
-    source_delivery_id: string | null;
-    action: 'pending' | 'reposted' | 'dismissed';
-    delivered_at: string;
-    opened_at: string | null;
-    acted_at: string | null;
+export type EmojiType = 'heart_fire' | 'thinking' | 'laughing' | 'mindblown';
+
+export type EmojiTallies = {
+    heart_fire?: number;
+    thinking?: number;
+    laughing?: number;
+    mindblown?: number;
 };
 
-export type Repost = {
+export const EMOJI_MAP: EmojiType[] = ['heart_fire', 'thinking', 'laughing', 'mindblown'];
+
+export const EMOJI_DISPLAY: Record<EmojiType, string> = {
+    heart_fire: '\u2764\uFE0F\u200D\uD83D\uDD25',
+    thinking: '🤔',
+    laughing: '😂',
+    mindblown: '🤯',
+};
+
+export type Card = {
     id: string;
-    post_id: string;
-    user_id: string;
+    video_url: string;
+    creator_username: string;
+    emoji_tallies: EmojiTallies;
+    total_wins: number;
+    comment_count: number;
+};
+
+export type Matchup = {
+    matchup_id: string;
+    card_a_id: string;
+    card_b_id: string;
+    card_a: Card;
+    card_b: Card;
     created_at: string;
-    user_name?: string; // joined from users table when fetching
+};
+
+export type KeptEntry = {
+    card_id: string;
+    my_emoji: EmojiType | null;
+    judged_at: string;
+    video_url: string;
+    emoji_tallies: EmojiTallies;
+    pending_views: number;
+    total_wins: number;
+    creator_username: string;
 };
 
 export type Comment = {
@@ -55,7 +80,6 @@ export type Comment = {
     author_id: string;
     body: string;
     created_at: string;
-    // Joined from users table when fetching
     author_name?: string;
 };
 
@@ -65,6 +89,7 @@ export type LogEntry = {
     user_name: string;
     user_id: string;
     body?: string;
+    emoji?: EmojiType;
     created_at: string;
 };
 
@@ -72,8 +97,8 @@ export type LogEntry = {
 // STORE INTERFACE
 // ═══════════════════════════════════════════════
 
-interface PostcardsStore {
-    // --- Auth ---
+interface CardsStore {
+    // --- Auth (keep all existing auth actions unchanged) ---
     currentUser: AppUser | null;
     isLoading: boolean;
     signInAnonymously: () => Promise<void>;
@@ -82,47 +107,37 @@ interface PostcardsStore {
     loadCurrentUser: (authId: string) => Promise<void>;
     updateLanguage: (lang: 'en' | 'fr') => Promise<void>;
 
-    // --- Locale ---
+    // --- Locale (unchanged) ---
     localeOverride: 'en' | 'fr' | null;
     setLocaleOverride: (lang: 'en' | 'fr' | null) => void;
 
-    // --- Deliveries + Posts ---
-    cachedDeliveries: Delivery[];
-    cachedPosts: Record<string, Post>;
-    cachedSenderMap: Record<string, string>;
+    // --- Matchups (replaces Deliveries) ---
+    cachedMatchups: Matchup[];
     isSyncing: boolean;
-    syncDeliveries: () => Promise<Delivery[]>;
-    markDeliveryOpened: (deliveryId: string) => Promise<void>;
-    getPostForDelivery: (delivery: Delivery) => Post | undefined;
+    syncMatchups: () => Promise<Matchup[]>;
 
-    // --- Create ---
-    createPostcard: (params: {
-        rectoUrl?: string;
-        selfieUrl?: string | null;
-        body?: string;
-    }) => Promise<string>;
+    // --- Judgment (replaces repost/dismiss) ---
+    judgeMatchup: (matchupId: string, keptCardId: string, emoji?: EmojiType | null, streak?: number) => Promise<void>;
 
-    // --- Repost / Dismiss ---
-    repostCard: (deliveryId: string) => Promise<void>;
-    dismissCard: (deliveryId: string) => Promise<void>;
-    fetchPostLog: (postId: string) => Promise<Array<{
-        id: string;
-        type: 'repost' | 'comment';
-        user_name: string;
-        user_id: string;
-        body?: string;
-        created_at: string;
-    }>>;
+    // --- Creation ---
+    createCard: (videoUrl: string) => Promise<string>;
 
-    // --- Comments (not persisted) ---
+    // --- Comments (unchanged) ---
     fetchComments: (postId: string) => Promise<Comment[]>;
     addComment: (postId: string, body: string) => Promise<Comment>;
 
-    // --- Outbox ---
-    cachedOutbox: Post[];
+    // --- Post log (unchanged) ---
+    fetchPostLog: (postId: string) => Promise<LogEntry[]>;
+
+    // --- Kept History (new — replaces outbox concept) ---
+    cachedKeptHistory: KeptEntry[];
+    fetchKeptHistory: () => Promise<void>;
+
+    // --- Outbox (user's created cards) ---
+    cachedOutbox: { id: string; video_url: string; emoji_tallies: EmojiTallies; pending_views: number; total_wins: number; created_at: string }[];
     fetchOutbox: () => Promise<void>;
 
-    // --- Heartbeat ---
+    // --- Heartbeat (unchanged) ---
     heartbeat: () => Promise<void>;
 }
 
@@ -130,17 +145,16 @@ interface PostcardsStore {
 // STORE IMPLEMENTATION
 // ═══════════════════════════════════════════════
 
-export const useStore = create<PostcardsStore>()(
+export const useStore = create<CardsStore>()(
     persist(
         (set, get) => ({
             // --- State ---
             currentUser: null,
             isLoading: true,
             localeOverride: null,
-            cachedDeliveries: [],
-            cachedPosts: {},
-            cachedSenderMap: {},
+            cachedMatchups: [],
             isSyncing: false,
+            cachedKeptHistory: [],
             cachedOutbox: [],
 
             // --- Auth (unchanged) ---
@@ -221,168 +235,88 @@ export const useStore = create<PostcardsStore>()(
             // --- Locale ---
             setLocaleOverride: (lang) => set({ localeOverride: lang }),
 
-            // --- Deliveries + Posts ---
-            syncDeliveries: async () => {
+            // --- Matchups ---
+            syncMatchups: async () => {
                 if (get().isSyncing) return [];
                 set({ isSyncing: true });
-
-                const { currentUser, cachedDeliveries, cachedPosts, cachedSenderMap } = get();
-                if (!currentUser) {
-                    set({ isSyncing: false });
-                    return [];
-                }
-
                 try {
-                    // High-water mark on delivered_at
-                    const lastDeliveredAt = cachedDeliveries.reduce((max, d) => {
-                        return d.delivered_at > max ? d.delivered_at : max;
-                    }, currentUser.created_at);
+                    const { cachedMatchups } = get();
+                    // High-water mark: get matchups created after the most recent cached one
+                    const lastCreatedAt = cachedMatchups.length > 0
+                        ? cachedMatchups[cachedMatchups.length - 1].created_at
+                        : null;
 
-                    // Fetch new pending deliveries with their posts
-                    const { data: rows, error } = await supabase
-                        .from('deliveries')
-                        .select('*, post:posts(*)')
-                        .eq('recipient_id', currentUser.id)
-                        .eq('action', 'pending')
-                        .gt('delivered_at', lastDeliveredAt)
-                        .order('delivered_at', { ascending: false });
-
+                    const { data, error } = await supabase.rpc('sync_matchups', {
+                        p_after: lastCreatedAt,
+                    });
                     if (error) throw error;
-                    if (!rows || rows.length === 0) return [];
 
-                    // Separate deliveries from posts
-                    const newPosts = { ...cachedPosts };
-                    const newDeliveries: Delivery[] = rows.map((row: any) => {
-                        if (row.post) {
-                            newPosts[row.post.id] = row.post as Post;
-                        }
-                        const { post, ...delivery } = row;
-                        return delivery as Delivery;
-                    });
+                    const newMatchups = (data || []) as Matchup[];
+                    const existingIds = new Set(cachedMatchups.map(m => m.matchup_id));
+                    const trulyNew = newMatchups.filter(m => !existingIds.has(m.matchup_id));
 
-                    // Fetch missing sender display names (source_user_id = who sent/reposted it to you)
-                    const senderMap = { ...cachedSenderMap };
-                    const newSenderIds = [...new Set(newDeliveries.map(d => d.source_user_id))]
-                        .filter(id => !senderMap[id]);
+                    const combined = [...cachedMatchups, ...trulyNew];
+                    set({ cachedMatchups: combined });
 
-                    if (newSenderIds.length > 0) {
-                        const { data: senders } = await supabase
-                            .from('users')
-                            .select('id, display_name')
-                            .in('id', newSenderIds);
-
-                        if (senders) {
-                            senders.forEach((s: any) => { senderMap[s.id] = s.display_name; });
-                        }
+                    // Prefetch videos for new matchups in the background
+                    if (trulyNew.length > 0) {
+                        prefetchMatchupVideos(trulyNew);
                     }
-
-                    // Also cache the post creators' names
-                    const creatorIds = [...new Set(
-                        newDeliveries
-                            .map(d => newPosts[d.post_id]?.sender_id)
-                            .filter((id): id is string => !!id && !senderMap[id])
-                    )];
-
-                    if (creatorIds.length > 0) {
-                        const { data: creators } = await supabase
-                            .from('users')
-                            .select('id, display_name')
-                            .in('id', creatorIds);
-
-                        if (creators) {
-                            creators.forEach((s: any) => { senderMap[s.id] = s.display_name; });
-                        }
-                    }
-
-                    // Merge, deduplicate, sort
-                    const existingIds = new Set(cachedDeliveries.map(d => d.id));
-                    const trulyNew = newDeliveries.filter(d => !existingIds.has(d.id));
-
-                    const combined = [...trulyNew, ...cachedDeliveries]
-                        .sort((a, b) => new Date(b.delivered_at).getTime() - new Date(a.delivered_at).getTime());
-
-                    set({
-                        cachedDeliveries: combined,
-                        cachedPosts: newPosts,
-                        cachedSenderMap: senderMap,
-                    });
 
                     return trulyNew;
                 } catch (e) {
-                    console.error('Error in delta sync', e);
+                    console.error('Error syncing matchups', e);
                     return [];
                 } finally {
                     set({ isSyncing: false });
                 }
             },
 
-            markDeliveryOpened: async (deliveryId: string) => {
-                const { error } = await supabase
-                    .from('deliveries')
-                    .update({ opened_at: new Date().toISOString() })
-                    .eq('id', deliveryId);
-
-                if (error) throw error;
-
+            judgeMatchup: async (matchupId, keptCardId, emoji, streak = 1) => {
+                // Optimistic: remove from cache IMMEDIATELY so the next render picks up the next matchup
                 set({
-                    cachedDeliveries: get().cachedDeliveries.map(d =>
-                        d.id === deliveryId ? { ...d, opened_at: new Date().toISOString() } : d
-                    ),
-                });
-            },
-
-            getPostForDelivery: (delivery: Delivery) => {
-                return get().cachedPosts[delivery.post_id];
-            },
-
-            // --- Create ---
-            createPostcard: async (params) => {
-                const { data, error } = await supabase.rpc('create_postcard', {
-                    p_recto_url: params.rectoUrl || null,
-                    p_selfie_url: params.selfieUrl || null,
-                    p_body: params.body || null,
+                    cachedMatchups: get().cachedMatchups.filter(m => m.matchup_id !== matchupId),
                 });
 
+                const { error } = await supabase.rpc('judge_matchup', {
+                    p_matchup_id: matchupId,
+                    p_kept_card_id: keptCardId,
+                    p_emoji: emoji ?? null,
+                    p_streak: streak,
+                });
+                if (error) {
+                    console.error('judge_matchup RPC error:', error);
+                    // Don't throw — the matchup is already removed from cache.
+                    // The judgment will be lost but the UX won't break.
+                }
+            },
+
+            createCard: async (videoUrl) => {
+                const { data, error } = await supabase.rpc('create_card', {
+                    p_video_url: videoUrl,
+                });
                 if (error) throw error;
                 return data as string; // post_id UUID
             },
 
-            // --- Repost / Dismiss ---
-            repostCard: async (deliveryId: string) => {
-                const { error } = await supabase.rpc('repost_card', {
-                    p_delivery_id: deliveryId,
-                });
+            fetchKeptHistory: async () => {
+                const { data, error } = await supabase.rpc('get_kept_history');
                 if (error) throw error;
-
-                set({
-                    cachedDeliveries: get().cachedDeliveries.filter(d => d.id !== deliveryId),
-                });
+                set({ cachedKeptHistory: (data || []) as KeptEntry[] });
             },
 
-            dismissCard: async (deliveryId: string) => {
-                const { error } = await supabase.rpc('dismiss_card', {
-                    p_delivery_id: deliveryId,
-                });
-                if (error) throw error;
-
-                set({
-                    cachedDeliveries: get().cachedDeliveries.filter(d => d.id !== deliveryId),
-                });
-            },
-
-            // --- Outbox ---
             fetchOutbox: async () => {
                 const { currentUser } = get();
                 if (!currentUser) return;
 
                 const { data, error } = await supabase
                     .from('posts')
-                    .select('*')
+                    .select('id, video_url, emoji_tallies, pending_views, total_wins, created_at')
                     .eq('sender_id', currentUser.id)
-                    .order('sent_at', { ascending: false });
+                    .order('created_at', { ascending: false });
 
                 if (error) throw error;
-                set({ cachedOutbox: (data || []) as Post[] });
+                set({ cachedOutbox: data || [] });
             },
 
             // --- Heartbeat ---
@@ -395,7 +329,7 @@ export const useStore = create<PostcardsStore>()(
                 const [{ data: reposts }, { data: comments }] = await Promise.all([
                     supabase
                         .from('reposts')
-                        .select('id, user_id, created_at, user:users(display_name)')
+                        .select('id, user_id, emoji, created_at, user:users(display_name)')
                         .eq('post_id', postId)
                         .order('created_at', { ascending: true }),
                     supabase
@@ -410,6 +344,7 @@ export const useStore = create<PostcardsStore>()(
                     type: 'repost' as const,
                     user_name: r.user?.display_name || 'Unknown',
                     user_id: r.user_id,
+                    emoji: r.emoji,
                     created_at: r.created_at,
                 }));
 
@@ -470,12 +405,11 @@ export const useStore = create<PostcardsStore>()(
 
         }),
         {
-            name: 'postcards-storage',  // NEW key — won't conflict with old 'postal-storage'
+            name: 'cards-storage',
             storage: createJSONStorage(() => AsyncStorage),
             partialize: (state) => ({
-                cachedDeliveries: state.cachedDeliveries,
-                cachedPosts: state.cachedPosts,
-                cachedSenderMap: state.cachedSenderMap,
+                cachedMatchups: state.cachedMatchups,
+                cachedKeptHistory: state.cachedKeptHistory,
                 cachedOutbox: state.cachedOutbox,
             }),
         }

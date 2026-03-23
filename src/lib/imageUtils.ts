@@ -1,70 +1,25 @@
-import * as Device from 'expo-device';
-import * as ImagePicker from 'expo-image-picker';
-import { Alert, Platform } from 'react-native';
-import { processPhoto } from './photoProcessor';
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from './supabase';
 
-export type ImagePickSource = 'camera' | 'library';
-
 /**
- * Launch the image picker (camera or library),
- * then crop to postcard ratio and aggressively compress to a small WebP file.
- * Returns the local URI of the compressed image, or null if cancelled.
+ * Upload a recorded video to Supabase Storage (card_videos bucket).
+ * Returns the public URL of the uploaded video.
  */
-export async function pickAndCompressImage(source: ImagePickSource): Promise<string | null> {
-    if (source === 'camera') {
-        if (!Device.isDevice) {
-            Alert.alert('Camera is not available on the simulator.');
-            return null;
-        }
-        const { status } = await ImagePicker.requestCameraPermissionsAsync();
-        if (status !== 'granted') {
-            Alert.alert('Camera access is needed to take photos.');
-            return null;
-        }
-    }
-
-    const pickerOptions: ImagePicker.ImagePickerOptions = {
-        mediaTypes: ['images'],
-        allowsEditing: true,
-        quality: 0.8,
-        ...(Platform.OS === 'android' ? { aspect: [297, 422] as [number, number] } : {}),
-    };
-
-    const result = source === 'camera'
-        ? await ImagePicker.launchCameraAsync(pickerOptions)
-        : await ImagePicker.launchImageLibraryAsync(pickerOptions);
-
-    if (result.canceled || !result.assets || result.assets.length === 0) {
-        return null;
-    }
-
-    const asset = result.assets[0];
-
-    // Process image through Skia for crop, sizing, effects, and WebP compression
-    return await processPhoto(asset.uri);
-}
-
-/**
- * Upload a compressed image to Supabase Storage.
- * Returns the public URL of the uploaded image.
- */
-export async function uploadPostcardImage(
+export async function uploadCardVideo(
     localUri: string,
     userId: string,
     sessionToken: string
 ): Promise<string> {
-    const fileName = `${userId}/${Date.now()}.webp`;
+    const fileName = `${userId}/${Date.now()}.mp4`;
 
     const formData = new FormData();
     formData.append('file', {
         uri: localUri,
         name: fileName,
-        type: 'image/webp',
+        type: 'video/mp4',
     } as any);
 
     const response = await fetch(
-        `${SUPABASE_URL}/storage/v1/object/postcard-images/${fileName}`,
+        `${SUPABASE_URL}/storage/v1/object/card_videos/${fileName}`,
         {
             method: 'POST',
             headers: {
@@ -77,9 +32,9 @@ export async function uploadPostcardImage(
 
     if (!response.ok) {
         const errText = await response.text();
-        console.error('Image upload error:', errText);
-        throw new Error(`Failed to upload image: ${response.status} ${errText}`);
+        console.error('Video upload error:', errText);
+        throw new Error(`Failed to upload video: ${response.status} ${errText}`);
     }
 
-    return `${SUPABASE_URL}/storage/v1/object/public/postcard-images/${fileName}`;
+    return `${SUPABASE_URL}/storage/v1/object/public/card_videos/${fileName}`;
 }

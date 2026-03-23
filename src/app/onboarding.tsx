@@ -1,10 +1,6 @@
-import { useCameraPermissions } from 'expo-camera';
-import * as Localization from 'expo-localization';
-import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
     ActivityIndicator,
-    Linking,
     Platform,
     StyleSheet,
     Text,
@@ -13,49 +9,77 @@ import {
     View,
 } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
-import { useTranslation } from '../lib/i18n';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useCameraPermissions } from 'expo-camera';
+import * as Localization from 'expo-localization';
+import { useRouter } from 'expo-router';
 import { useStore } from '../lib/store';
 import { supabase } from '../lib/supabase';
+import GlassSurface from '../components/GlassSurface';
 import { Theme } from '../theme';
 
-type OnboardingStep = 'welcome' | 'camera';
+type Step = 'username' | 'camera';
 
 export default function OnboardingScreen() {
-    const [step, setStep] = useState<OnboardingStep>('welcome');
-    const { t } = useTranslation();
     const router = useRouter();
-
-    // -- Step 1 State --
-    const [displayName, setDisplayName] = useState('');
-    const [isSubmitting, setIsSubmitting] = useState(false);
-    const [submitError, setSubmitError] = useState<string | null>(null);
-
-    // -- Step 2 State --
-    const [cameraPermission, requestCameraPermission] = useCameraPermissions();
-
+    const insets = useSafeAreaInsets();
     const { signInAnonymously, createUser } = useStore();
 
-    const trimmedName = displayName.trim();
-    const isNameValid = trimmedName.length >= 2;
+    const [step, setStep] = useState<Step>('username');
+    const [username, setUsername] = useState('');
+    const [isChecking, setIsChecking] = useState(false);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [cameraPermission, requestCameraPermission] = useCameraPermissions();
 
-    const handleWelcomeContinue = async () => {
-        if (!isNameValid || isSubmitting) return;
+    const trimmed = username.trim().toLowerCase();
+    const isValid = /^[a-z0-9_]{3,20}$/.test(trimmed);
+
+    // Debounced uniqueness check
+    const checkRef = React.useRef<NodeJS.Timeout | null>(null);
+
+    const handleUsernameChange = useCallback((text: string) => {
+        // Force lowercase, strip spaces
+        const clean = text.toLowerCase().replace(/[^a-z0-9_]/g, '');
+        setUsername(clean);
+        setError(null);
+
+        if (checkRef.current) clearTimeout(checkRef.current);
+
+        const trimmedInput = clean.trim();
+        if (trimmedInput.length < 3) return;
+
+        setIsChecking(true);
+        checkRef.current = setTimeout(async () => {
+            try {
+                const { count, error: queryError } = await supabase
+                    .from('users')
+                    .select('id', { count: 'exact', head: true })
+                    .eq('display_name', trimmedInput);
+
+                if (queryError) throw queryError;
+                if ((count || 0) > 0) {
+                    setError('taken');
+                }
+            } catch (e) {
+                console.error('Username check failed:', e);
+            } finally {
+                setIsChecking(false);
+            }
+        }, 500);
+    }, []);
+
+    const handleContinue = async () => {
+        if (!isValid || isSubmitting || error === 'taken') return;
         setIsSubmitting(true);
-        setSubmitError(null);
+        setError(null);
 
         try {
-            // 1. Sign in anonymously
             await signInAnonymously();
+            const lang = Localization.getLocales()[0]?.languageCode?.startsWith('fr') ? 'fr' : 'en';
+            await createUser(trimmed, lang);
 
-            // 2. Detect language
-            const detectedLang = Localization.getLocales()[0]?.languageCode?.startsWith('fr') ? 'fr' : 'en';
-
-            // 3. Create user
-            await createUser(trimmedName, detectedLang);
-
-            // 4. Trigger backfill for new user's stack
+            // Backfill matchups for new user
             const { data: userData } = await supabase
                 .from('users')
                 .select('id')
@@ -63,138 +87,134 @@ export default function OnboardingScreen() {
                 .single();
 
             if (userData) {
-                const { error } = await supabase.rpc('backfill_new_user', { p_user_id: userData.id });
-                if (error) console.error(error);
+                await supabase.rpc('backfill_new_user_v2', { p_user_id: userData.id }).catch(console.error);
             }
 
-            // 5. Move to camera permission step
             setStep('camera');
         } catch (e) {
             console.error('Onboarding error:', e);
-            setSubmitError(e instanceof Error ? e.message : 'An error occurred');
+            setError(e instanceof Error ? e.message : 'Something went wrong');
         } finally {
             setIsSubmitting(false);
         }
     };
 
-    const handleCameraContinue = async () => {
+    const handleCameraPermission = async () => {
         if (!cameraPermission?.granted) {
-            const result = await requestCameraPermission();
-            if (!result.granted) {
-                // User denied — still let them proceed, they can grant later
-                // when they try to take a photo
-            }
+            await requestCameraPermission();
         }
-        // Navigate to main regardless of permission result
         router.replace('/(main)' as any);
     };
 
-    const handleSkipCamera = () => {
-        router.replace('/(main)' as any);
-    };
-
-    // ── Step 1: Welcome ──
-    if (step === 'welcome') {
+    // ── Step 1: Username ──
+    if (step === 'username') {
         return (
-            <SafeAreaView style={styles.container}>
+            <View style={styles.container}>
                 <KeyboardAwareScrollView
-                    contentContainerStyle={styles.content}
+                    contentContainerStyle={[
+                        styles.content,
+                        { paddingTop: insets.top + 60, paddingBottom: insets.bottom + 40 }
+                    ]}
                     bottomOffset={Platform.OS === 'ios' ? 40 : 0}
                     keyboardShouldPersistTaps="handled"
                 >
-                    <Text style={styles.title}>
-                        {t('onboarding.welcome' as any) || 'Welcome to Postcards'}
-                    </Text>
-                    <Text style={styles.subtitle}>
-                        {t('onboarding.namePrompt' as any) || 'What should we call you?'}
-                    </Text>
+                    <Text style={styles.title}>pick a username</Text>
+                    <Text style={styles.subtitle}>this is how others will see you</Text>
 
-                    <TextInput
-                        style={styles.input}
-                        value={displayName}
-                        onChangeText={setDisplayName}
-                        placeholder={t('onboarding.namePlaceholder' as any) || 'Your name'}
-                        placeholderTextColor={Theme.colors.secondary}
-                        autoCapitalize="words"
-                        autoCorrect={false}
-                        autoFocus
-                        maxLength={30}
-                    />
+                    <View style={styles.inputRow}>
+                        <Text style={styles.atSign}>@</Text>
+                        <TextInput
+                            style={styles.input}
+                            value={username}
+                            onChangeText={handleUsernameChange}
+                            placeholder="username"
+                            placeholderTextColor={Theme.colors.textTertiary}
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                            autoFocus
+                            maxLength={20}
+                            keyboardAppearance="dark"
+                        />
+                        {isChecking && (
+                            <ActivityIndicator size="small" color={Theme.colors.textTertiary} />
+                        )}
+                    </View>
 
-                    {submitError && (
-                        <Text style={[styles.errorText, { marginTop: 16 }]}>{submitError}</Text>
-                    )}
+                    {/* Validation feedback */}
+                    <View style={styles.feedback}>
+                        {error === 'taken' && (
+                            <Text style={styles.errorText}>already taken</Text>
+                        )}
+                        {error && error !== 'taken' && (
+                            <Text style={styles.errorText}>{error}</Text>
+                        )}
+                        {!error && trimmed.length >= 3 && !isChecking && (
+                            <Text style={styles.availableText}>available</Text>
+                        )}
+                        {trimmed.length > 0 && trimmed.length < 3 && (
+                            <Text style={styles.hintTextOnboarding}>3 characters minimum</Text>
+                        )}
+                    </View>
 
                     <View style={{ flex: 1 }} />
 
                     <TouchableOpacity
-                        style={[styles.button, (!isNameValid || isSubmitting) && styles.buttonDisabled, { marginTop: 32 }]}
-                        onPress={handleWelcomeContinue}
-                        disabled={!isNameValid || isSubmitting}
+                        style={[
+                            styles.button,
+                            (!isValid || isSubmitting || error === 'taken') && styles.buttonDisabled
+                        ]}
+                        onPress={handleContinue}
+                        disabled={!isValid || isSubmitting || error === 'taken'}
+                        activeOpacity={0.8}
                     >
                         {isSubmitting ? (
-                            <ActivityIndicator color="#FFFFFF" style={{ marginRight: 8 }} />
-                        ) : null}
-                        <Text style={styles.buttonText}>
-                            {t('onboarding.continue' as any) || 'Continue'}
-                        </Text>
+                            <ActivityIndicator color={Theme.colors.textOnAccent} />
+                        ) : (
+                            <Text style={styles.buttonText}>continue</Text>
+                        )}
                     </TouchableOpacity>
                 </KeyboardAwareScrollView>
-            </SafeAreaView>
+            </View>
         );
     }
 
     // ── Step 2: Camera Permission ──
     return (
-        <SafeAreaView style={styles.container}>
-            <View style={[styles.content, { justifyContent: 'center', flex: 1 }]}>
-                <View style={{ alignItems: 'center' }}>
-                    <View style={{
-                        width: 80,
-                        height: 80,
-                        borderRadius: 40,
-                        backgroundColor: 'rgba(0,0,0,0.05)',
-                        justifyContent: 'center',
-                        alignItems: 'center',
-                        marginBottom: 24,
-                    }}>
-                        <Ionicons name="camera-outline" size={36} color="rgba(0,0,0,0.5)" />
-                    </View>
-
-                    <Text style={[styles.title, { textAlign: 'center' }]}>
-                        {t('onboarding.cameraTitle' as any) || 'Enable Camera'}
+        <View style={styles.container}>
+            <View style={[styles.content, {
+                paddingTop: insets.top + 60,
+                paddingBottom: insets.bottom + 40,
+                justifyContent: 'center',
+                flex: 1,
+            }]}>
+                <View style={styles.cameraPrompt}>
+                    <Text style={styles.cameraIcon}>📷</Text>
+                    <Text style={[styles.title, { textAlign: 'center', marginTop: 16 }]}>
+                        enable camera
                     </Text>
-                    <Text style={[styles.subtitle, { textAlign: 'center', marginTop: 12, paddingHorizontal: 20 }]}>
-                        {t('onboarding.cameraSubtitle' as any) || 'Postcards uses your camera to capture what you see and share it with the world.'}
+                    <Text style={[styles.subtitle, { textAlign: 'center', marginTop: 8 }]}>
+                        you'll need it to create cards
                     </Text>
                 </View>
 
                 <View style={{ marginTop: 48 }}>
                     <TouchableOpacity
                         style={styles.button}
-                        onPress={handleCameraContinue}
+                        onPress={handleCameraPermission}
+                        activeOpacity={0.8}
                     >
-                        <Ionicons name="camera" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
-                        <Text style={styles.buttonText}>
-                            {t('onboarding.allowCamera' as any) || 'Allow Camera Access'}
-                        </Text>
+                        <Text style={styles.buttonText}>allow camera</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
-                        style={{ marginTop: 16, alignItems: 'center', padding: 12 }}
-                        onPress={handleSkipCamera}
+                        style={styles.skipButton}
+                        onPress={() => router.replace('/(main)' as any)}
                     >
-                        <Text style={{
-                            fontFamily: 'Avenir Next',
-                            fontSize: 14,
-                            color: Theme.colors.secondary,
-                        }}>
-                            {t('onboarding.skipCamera' as any) || 'Skip for now'}
-                        </Text>
+                        <Text style={styles.skipText}>skip for now</Text>
                     </TouchableOpacity>
                 </View>
             </View>
-        </SafeAreaView>
+        </View>
     );
 }
 
@@ -205,51 +225,95 @@ const styles = StyleSheet.create({
     },
     content: {
         flexGrow: 1,
-        padding: Theme.sizes.horizontalPadding,
-        paddingTop: 40,
-        paddingBottom: 40,
+        paddingHorizontal: 32,
     },
     title: {
-        fontFamily: Theme.fonts.body,
+        fontFamily: Theme.fonts.base,
         fontSize: 28,
-        color: Theme.colors.text,
+        fontWeight: '700',
+        color: Theme.colors.textPrimary,
+        letterSpacing: -0.5,
     },
     subtitle: {
-        fontFamily: Theme.fonts.body,
+        fontFamily: Theme.fonts.base,
         fontSize: 16,
-        color: Theme.colors.secondary,
+        fontWeight: '400',
+        color: Theme.colors.textTertiary,
         marginTop: 8,
     },
-    input: {
-        fontFamily: Theme.fonts.body,
-        fontSize: 18,
-        color: Theme.colors.text,
+    inputRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginTop: 40,
         borderBottomWidth: 1,
-        borderBottomColor: 'rgba(0,0,0,0.1)',
-        paddingVertical: 12,
-        marginTop: 16,
+        borderBottomColor: Theme.colors.buttonBorder,
+        paddingBottom: 12,
+    },
+    atSign: {
+        fontFamily: Theme.fonts.base,
+        fontSize: 22,
+        fontWeight: '600',
+        color: Theme.colors.sheetHandle,
+        marginRight: 4,
+    },
+    input: {
+        flex: 1,
+        fontFamily: Theme.fonts.base,
+        fontSize: 22,
+        fontWeight: '600',
+        color: Theme.colors.textPrimary,
+        padding: 0, // remove default padding
+    },
+    feedback: {
+        marginTop: 12,
+        height: 20, // fixed height to prevent layout jumps
     },
     errorText: {
-        fontFamily: Theme.fonts.body,
-        fontSize: 14,
-        color: '#FF4444',
+        fontFamily: Theme.fonts.base,
+        fontSize: 13,
+        color: Theme.colors.danger,
+    },
+    availableText: {
+        fontFamily: Theme.fonts.base,
+        fontSize: 13,
+        color: Theme.colors.success,
+    },
+    hintTextOnboarding: {
+        fontFamily: Theme.fonts.base,
+        fontSize: 13,
+        color: Theme.colors.textTertiary,
     },
     button: {
-        flexDirection: 'row',
-        backgroundColor: 'rgba(0,0,0,0.8)',
+        backgroundColor: Theme.colors.accent,
         borderRadius: 14,
-        paddingVertical: 14,
-        paddingHorizontal: 24,
+        paddingVertical: 16,
         alignItems: 'center',
         justifyContent: 'center',
     },
     buttonDisabled: {
-        backgroundColor: 'rgba(0,0,0,0.2)',
+        backgroundColor: 'rgba(255,255,255,0.08)',
     },
     buttonText: {
-        color: '#FFFFFF',
+        fontFamily: Theme.fonts.base,
         fontSize: 16,
         fontWeight: '600',
-        fontFamily: 'Avenir Next',
+        color: Theme.colors.textOnAccent,
+        letterSpacing: -0.3,
+    },
+    skipButton: {
+        marginTop: 16,
+        alignItems: 'center',
+        padding: 12,
+    },
+    skipText: {
+        fontFamily: Theme.fonts.base,
+        fontSize: 14,
+        color: Theme.colors.sheetHandle,
+    },
+    cameraPrompt: {
+        alignItems: 'center',
+    },
+    cameraIcon: {
+        fontSize: 48,
     },
 });

@@ -1,7 +1,4 @@
-// Sound functionality commented out for now. Will add back later with expo-audio.
+// Sound assets — used with expo-audio's useAudioPlayer hook in components.
+// This file just exports the asset references.
 
-export async function loadSounds() { }
-export async function playFlip() { }
-export async function playSend() { }
-export async function playReceive() { }
-export async function unloadSounds() { }
+export const YEET_SOUND = require('../assets/sounds/yeet.mp3');

@@ -53,8 +53,8 @@ export async function registerForPushNotifications(userId: string): Promise<void
 
         // Android notification channel
         if (Platform.OS === 'android') {
-            await Notifications.setNotificationChannelAsync('letters', {
-                name: 'Letters',
+            await Notifications.setNotificationChannelAsync('deliveries', {
+                name: 'Deliveries',
                 importance: Notifications.AndroidImportance.HIGH,
                 sound: 'default',
             });

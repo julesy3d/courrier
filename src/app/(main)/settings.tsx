@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from '../../lib/i18n';
 import { useStore } from '../../lib/store';
+import { Theme } from '../../theme';
 
 export default function SettingsScreen() {
     const router = useRouter();
@@ -60,18 +61,19 @@ export default function SettingsScreen() {
 
 const styles = StyleSheet.create({
     title: {
-        fontFamily: 'Avenir Next',
+        fontFamily: Theme.fonts.base,
         fontSize: 22,
         color: 'rgba(255,255,255,0.9)',
         marginBottom: 32,
     },
     label: {
+        fontFamily: Theme.fonts.base,
         fontSize: 13,
-        color: 'rgba(255,255,255,0.5)',
+        color: Theme.colors.textSecondary,
         marginBottom: 8,
     },
     value: {
-        fontFamily: 'Avenir Next',
+        fontFamily: Theme.fonts.base,
         fontSize: 18,
         color: 'rgba(255,255,255,0.9)',
     },
@@ -84,16 +86,16 @@ const styles = StyleSheet.create({
         paddingVertical: 10,
         borderRadius: 10,
         borderWidth: StyleSheet.hairlineWidth,
-        borderColor: 'rgba(255,255,255,0.15)',
+        borderColor: Theme.colors.buttonBorder,
     },
     langActive: {
-        backgroundColor: 'rgba(255,255,255,0.1)',
-        borderColor: 'rgba(255,255,255,0.3)',
+        backgroundColor: Theme.colors.inputBackground,
+        borderColor: Theme.colors.sheetHandle,
     },
     langText: {
-        fontFamily: 'Avenir Next',
+        fontFamily: Theme.fonts.base,
         fontSize: 15,
-        color: 'rgba(255,255,255,0.5)',
+        color: Theme.colors.textSecondary,
     },
     langTextActive: {
         color: 'rgba(255,255,255,0.9)',

@@ -16,6 +16,16 @@ const en = {
     'address.name': 'Name',
     'address.preview': 'Your address',
 
+    // New Onboarding (V2)
+    'onboarding.welcome': 'Welcome to Postcards',
+    'onboarding.namePrompt': 'What should we call you?',
+    'onboarding.namePlaceholder': 'Your name',
+    'onboarding.continue': 'Continue',
+    'onboarding.cameraTitle': 'Enable Camera',
+    'onboarding.cameraSubtitle': 'Postcards uses your camera to capture what you see and share it with the world.',
+    'onboarding.allowCamera': 'Allow Camera Access',
+    'onboarding.skipCamera': 'Skip for now',
+
     // Common
     'common.cancel': 'Cancel',
     'common.done': 'Done',
@@ -57,29 +67,13 @@ const en = {
     'share.otherMessenger': 'Other messenger',
     'share.iMessageText': 'I sent you a postcard! Download Postal to reply.',
 
-    // Letters Tab
+    // Main Stack
     'stack.empty': 'Your postcards are out in the world...',
-    'letters.tab': 'Letters',
-    'letters.received': 'Received',
-    'letters.sent': 'Sent',
-    'letters.itemTitle': 'A letter',
-    'letters.empty': 'No letters yet.\nGive your address to a friend, in person.',
-    'letters.returnedTitle': 'Return to sender',
-    'letters.returnedTo': 'To:',
-    'letters.unknownSender': 'Unknown sender',
+    'stack.unknownSender': 'Unknown sender',
 
-    // Carnet Tab
-    'carnet.tab': 'Address Book',
-    'carnet.title': 'Your address book',
-    'carnet.tapToOpen': 'Tap to open',
-    'carnet.empty': "Your address book is empty.\nAdd someone's address here so you can write to them.",
-    'carnet.newContact': 'New contact',
-    'carnet.name': 'Name',
-    'carnet.address': 'Address',
-    'carnet.save': 'Save',
-    'carnet.delete': 'Delete',
-    'carnet.deleteConfirm': 'Are you sure you want to remove {name} from your carnet?',
-    'carnet.discoveryEmpty': 'No new contacts found.',
+    // Outbox
+    'outbox.title': 'Outbox',
+    'outbox.empty': 'Your postcards will appear here',
 
     // Settings
     'settings.title': 'Settings',
@@ -92,22 +86,6 @@ const en = {
     'settings.alert.cancel': 'Keep my address',
     'settings.alert.confirm': 'Change it',
     'settings.saveNewAddress': 'Save new address',
-
-    // Letter Detail
-    'letter.detail.from': 'From',
-    'letter.detail.to': 'To',
-    'letter.detail.notFound': 'Letter not found',
-    'letter.reply': 'Reply',
-    'letter.comments': 'Comments',
-
-    // Comments
-    'comments.empty': 'No comments yet. Be the first.',
-    'comments.placeholder': 'Write a comment...',
-    'comments.send': 'Send',
-
-    // First post
-    'firstPost.prompt': "Take a picture of what's in front of you.",
-    'firstPost.posting': 'Posting...',
 
     // Capture / Preview
     'capture.retake': 'Retake',
@@ -138,6 +116,16 @@ const fr = {
     'address.particle': 'Particule',
     'address.name': 'Nom',
     'address.preview': 'Ton adresse',
+
+    // New Onboarding (V2)
+    'onboarding.welcome': 'Bienvenue sur Postcards',
+    'onboarding.namePrompt': 'Comment devons-nous vous appeler ?',
+    'onboarding.namePlaceholder': 'Votre nom',
+    'onboarding.continue': 'Continuer',
+    'onboarding.cameraTitle': 'Activer la caméra',
+    'onboarding.cameraSubtitle': 'Postcards utilise votre caméra pour capturer ce que vous voyez et le partager avec le monde.',
+    'onboarding.allowCamera': 'Autoriser la caméra',
+    'onboarding.skipCamera': 'Passer pour le moment',
 
     // Common
     'common.cancel': 'Annuler',
@@ -180,29 +168,13 @@ const fr = {
     'share.otherMessenger': 'Autre messagerie',
     'share.iMessageText': "Je t'ai envoyé une carte postale ! Télécharge Postal pour y répondre.",
 
-    // Letters Tab
+    // Main Stack
     'stack.empty': 'Tes cartes postales parcourent le monde...',
-    'letters.tab': 'Lettres',
-    'letters.received': 'Reçues',
-    'letters.sent': 'Envoyées',
-    'letters.itemTitle': 'Une lettre',
-    'letters.empty': 'Pas encore de lettres.\nDonne ton adresse à un ami :)',
-    'letters.returnedTitle': 'Retour à l\'expéditeur',
-    'letters.returnedTo': 'À :',
-    'letters.unknownSender': 'Expéditeur inconnu',
+    'stack.unknownSender': 'Expéditeur inconnu',
 
-    // Carnet Tab
-    'carnet.tab': 'Carnet',
-    'carnet.title': 'Ton carnet d\'adresses',
-    'carnet.tapToOpen': 'Touche pour ouvrir',
-    'carnet.empty': "Ton carnet est vide.\nAjoute l'adresse de quelqu'un pour pouvoir lui écrire.",
-    'carnet.newContact': 'Nouveau contact',
-    'carnet.name': 'Nom',
-    'carnet.address': 'Adresse',
-    'carnet.save': 'Enregistrer',
-    'carnet.delete': 'Supprimer',
-    'carnet.deleteConfirm': 'Tu veux vraiment retirer {name} de ton carnet ?',
-    'carnet.discoveryEmpty': 'Aucun nouveau contact trouvé.',
+    // Outbox
+    'outbox.title': 'Envois',
+    'outbox.empty': 'Vos cartes postales apparaîtront ici',
 
     // Settings
     'settings.title': 'Réglages',
@@ -216,22 +188,6 @@ const fr = {
     'settings.alert.confirm': 'La changer',
     'settings.saveNewAddress': 'Enregistrer la nouvelle adresse',
 
-    // Letter Detail
-    'letter.detail.from': 'De',
-    'letter.detail.to': 'À',
-    'letter.detail.notFound': 'Lettre introuvable',
-    'letter.reply': 'Repondre',
-    'letter.comments': 'Commentaires',
-
-    // Comments
-    'comments.empty': 'Pas encore de commentaires. Sois le premier.',
-    'comments.placeholder': 'Écris un commentaire...',
-    'comments.send': 'Envoyer',
-
-    // First post
-    'firstPost.prompt': 'Prends en photo ce qui est devant toi.',
-    'firstPost.posting': 'Envoi en cours...',
-
     // Capture / Preview
     'capture.retake': 'Reprendre',
     'capture.send': 'Envoyer',
@@ -240,12 +196,12 @@ const fr = {
 
     // Inspect — repost / dismiss
     'inspect.repost': 'Reposter',
-    'inspect.dismiss': 'Ignorer',
+    'inspect.dismiss': 'Supprimer',
 
     // Post Log
     'log.title': 'Journal',
-    'log.reposted': 'a renvoyé',
-    'log.empty': 'Aucune activité.',
+    'log.reposted': 'a reposté',
+    'log.empty': 'Aucune activité pour le moment.',
 };
 
 const translations = { en, fr };

@@ -5,13 +5,13 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { useStore } from '../../lib/store';
+import { useStore, KeptEntry, EMOJI_DISPLAY } from '../../lib/store';
 import PostLogSheet from '../../components/PostLogSheet';
 import { Theme } from '../../theme';
 
 const { width } = Dimensions.get('window');
 
-function OutboxCard({ item, onPress }: { item: any; onPress: () => void }) {
+function KeptCard({ item, onPress }: { item: KeptEntry; onPress: () => void }) {
     const player = useVideoPlayer(item.video_url, p => {
         p.loop = false;
         p.pause();
@@ -39,10 +39,16 @@ function OutboxCard({ item, onPress }: { item: any; onPress: () => void }) {
                         <Text style={{ fontSize: 32 }}>💀</Text>
                     </View>
                 )}
+
+                {item.my_emoji && (
+                    <View style={styles.emojiBadge}>
+                        <Text style={{ fontSize: 16 }}>{EMOJI_DISPLAY[item.my_emoji]}</Text>
+                    </View>
+                )}
             </View>
 
             <View style={styles.cardInfo}>
-                <Text style={styles.creatorName}>{new Date(item.created_at).toLocaleDateString()}</Text>
+                <Text style={styles.creatorName}>by {item.creator_username}</Text>
                 <View style={styles.statsRow}>
                     <Text style={styles.statText}>🏆 <Text style={styles.statNumber}>{item.total_wins}</Text></Text>
                     <Text style={styles.statText}>🌿 <Text style={styles.statNumber}>{item.pending_views}</Text></Text>
@@ -52,15 +58,15 @@ function OutboxCard({ item, onPress }: { item: any; onPress: () => void }) {
     );
 }
 
-export default function OutboxScreen() {
-    const { cachedOutbox, fetchOutbox } = useStore();
+export default function KeptHistoryScreen() {
+    const { cachedKeptHistory, fetchKeptHistory } = useStore();
     const router = useRouter();
     const insets = useSafeAreaInsets();
     const [isLoading, setIsLoading] = useState(true);
     const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
 
     useEffect(() => {
-        fetchOutbox()
+        fetchKeptHistory()
             .catch(console.error)
             .finally(() => setIsLoading(false));
     }, []);
@@ -72,7 +78,7 @@ export default function OutboxScreen() {
                     <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
                         <Ionicons name="chevron-back" size={28} color={Theme.colors.textPrimary} />
                     </TouchableOpacity>
-                    <Text style={styles.title}>My Cards</Text>
+                    <Text style={styles.title}>Kept History</Text>
                     <View style={{ width: 28 }} />
                 </View>
 
@@ -80,23 +86,23 @@ export default function OutboxScreen() {
                     <View style={styles.center}>
                         <ActivityIndicator size="large" color={Theme.colors.textSecondary} />
                     </View>
-                ) : cachedOutbox.length === 0 ? (
+                ) : cachedKeptHistory.length === 0 ? (
                     <View style={styles.center}>
-                        <Text style={styles.emptyText}>You haven't created any cards yet.</Text>
+                        <Text style={styles.emptyText}>You haven't kept any cards yet.</Text>
                     </View>
                 ) : (
                     <FlatList
-                        data={cachedOutbox}
-                        keyExtractor={(item) => item.id}
+                        data={cachedKeptHistory}
+                        keyExtractor={(item) => item.card_id}
                         numColumns={2}
                         columnWrapperStyle={styles.row}
                         contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 20 }}
                         renderItem={({ item }) => (
-                            <OutboxCard
+                            <KeptCard
                                 item={item}
                                 onPress={() => {
                                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                                    setSelectedPostId(item.id);
+                                    setSelectedPostId(item.card_id);
                                 }}
                             />
                         )}
@@ -131,6 +137,7 @@ const styles = StyleSheet.create({
     row: { justifyContent: 'space-between', marginBottom: 16 },
     card: { width: (width - 48) / 2 },
     thumbnailContainer: { width: '100%', aspectRatio: 3/4, borderRadius: 8, overflow: 'hidden', backgroundColor: Theme.colors.surfaceAlt },
+    emojiBadge: { position: 'absolute', top: 8, right: 8, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 16, padding: 6 },
     deadOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: Theme.colors.overlay, justifyContent: 'center', alignItems: 'center' },
     cardInfo: { marginTop: 8 },
     creatorName: { fontFamily: Theme.fonts.base, color: Theme.colors.textPrimary, fontSize: 14, fontWeight: '500' },

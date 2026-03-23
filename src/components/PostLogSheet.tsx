@@ -16,7 +16,7 @@ import {
     View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { LogEntry, useStore } from '../lib/store';
+import { LogEntry, useStore, EMOJI_DISPLAY } from '../lib/store';
 import { useTranslation } from '../lib/i18n';
 import { Theme } from '../theme';
 
@@ -51,6 +51,9 @@ function groupConsecutiveReposts(entries: LogEntry[]): DisplayEntry[] {
 
     for (const entry of entries) {
         if (entry.type === 'repost') {
+            if (currentGroup.length > 0 && currentGroup[0].emoji !== entry.emoji) {
+                flushGroup();
+            }
             currentGroup.push(entry);
         } else {
             flushGroup();
@@ -174,15 +177,15 @@ export default function PostLogSheet({ postId, onClose }: PostLogSheetProps) {
                 paddingTop: 10,
                 paddingBottom: insets.bottom || 12,
                 borderTopWidth: StyleSheet.hairlineWidth,
-                borderTopColor: 'rgba(255,255,255,0.1)',
-                backgroundColor: 'rgba(30,30,30,0.98)',
+                borderTopColor: Theme.colors.inputBackground,
+                backgroundColor: Theme.colors.sheetBackground,
             }}>
                 <BottomSheetTextInput
                     style={styles.input}
                     value={inputText}
                     onChangeText={setInputText}
                     placeholder="Add a comment..."
-                    placeholderTextColor="rgba(255,255,255,0.5)"
+                    placeholderTextColor={Theme.colors.textSecondary}
                     maxLength={400}
                     returnKeyType="send"
                     onSubmitEditing={handleSend}
@@ -194,12 +197,12 @@ export default function PostLogSheet({ postId, onClose }: PostLogSheetProps) {
                     style={styles.sendButton}
                 >
                     {isSending ? (
-                        <ActivityIndicator size="small" color="#007AFF" />
+                        <ActivityIndicator size="small" color={Theme.colors.accent} />
                     ) : (
                         <Ionicons
                             name="arrow-up-circle"
                             size={32}
-                            color={inputText.trim() ? '#007AFF' : 'rgba(255,255,255,0.3)'}
+                            color={inputText.trim() ? Theme.colors.accent : Theme.colors.sheetHandle}
                         />
                     )}
                 </TouchableOpacity>
@@ -212,6 +215,8 @@ export default function PostLogSheet({ postId, onClose }: PostLogSheetProps) {
         if (item.type === 'repost_group') {
             const group = item as GroupedRepost;
             const isExpanded = expandedGroups.has(group.id);
+            const groupEmojiCode = group.entries[0].emoji;
+            const groupEmojiStr = groupEmojiCode ? EMOJI_DISPLAY[groupEmojiCode] : '';
 
             if (isExpanded) {
                 // Show all entries individually
@@ -219,12 +224,16 @@ export default function PostLogSheet({ postId, onClose }: PostLogSheetProps) {
                     <View>
                         {group.entries.map((entry) => (
                             <View key={entry.id} style={styles.repostRow}>
-                                <Ionicons name="arrow-redo" size={14} color="rgba(255,255,255,0.35)" />
+                                {entry.emoji ? (
+                                    <Text style={{ fontSize: 14 }}>{EMOJI_DISPLAY[entry.emoji]}</Text>
+                                ) : (
+                                    <Ionicons name="arrow-redo" size={14} color={Theme.colors.textTertiary} />
+                                )}
                                 <Text style={styles.repostText}>
-                                    <Text style={[styles.repostName, entry.user_id === currentUser?.id && { color: '#007AFF' }]}>
+                                    <Text style={[styles.repostName, entry.user_id === currentUser?.id && { color: Theme.colors.accent }]}>
                                         {entry.user_name}
                                     </Text>
-                                    {' '}{t('log.reposted' as any) || 'reposted'}
+                                    {' '}{entry.emoji ? `reacted with ${EMOJI_DISPLAY[entry.emoji]}` : 'reposted'}
                                 </Text>
                                 <Text style={styles.timestamp}>{timeAgo(entry.created_at)}</Text>
                             </View>
@@ -253,10 +262,14 @@ export default function PostLogSheet({ postId, onClose }: PostLogSheetProps) {
                     activeOpacity={0.7}
                     style={styles.repostRow}
                 >
-                    <Ionicons name="arrow-redo" size={14} color="rgba(255,255,255,0.35)" />
+                    {groupEmojiCode ? (
+                        <Text style={{ fontSize: 14 }}>{groupEmojiStr}</Text>
+                    ) : (
+                        <Ionicons name="arrow-redo" size={14} color={Theme.colors.textTertiary} />
+                    )}
                     <Text style={styles.repostText}>
                         <Text style={styles.repostName}>{summary}</Text>
-                        {' '}{t('log.reposted' as any) || 'reposted'}
+                        {' '}{groupEmojiCode ? `reacted with ${groupEmojiStr}` : 'reposted'}
                     </Text>
                     <Text style={styles.timestamp}>{timeAgo(group.created_at)}</Text>
                 </TouchableOpacity>
@@ -267,12 +280,16 @@ export default function PostLogSheet({ postId, onClose }: PostLogSheetProps) {
             const isMe = item.user_id === currentUser?.id;
             return (
                 <View style={styles.repostRow}>
-                    <Ionicons name="arrow-redo" size={14} color="rgba(255,255,255,0.35)" />
+                    {item.emoji ? (
+                        <Text style={{ fontSize: 14 }}>{EMOJI_DISPLAY[item.emoji]}</Text>
+                    ) : (
+                        <Ionicons name="arrow-redo" size={14} color={Theme.colors.textTertiary} />
+                    )}
                     <Text style={styles.repostText}>
-                        <Text style={[styles.repostName, isMe && { color: '#007AFF' }]}>
+                        <Text style={[styles.repostName, isMe && { color: Theme.colors.accent }]}>
                             {item.user_name}
                         </Text>
-                        {' '}{t('log.reposted' as any) || 'reposted'}
+                        {' '}{item.emoji ? `reacted with ${EMOJI_DISPLAY[item.emoji]}` : 'reposted'}
                     </Text>
                     <Text style={styles.timestamp}>{timeAgo(item.created_at)}</Text>
                 </View>
@@ -285,7 +302,7 @@ export default function PostLogSheet({ postId, onClose }: PostLogSheetProps) {
             <View style={styles.commentRow}>
                 <View style={{ flex: 1 }}>
                     <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
-                        <Text style={[styles.authorName, isMe && { color: '#007AFF' }]}>
+                        <Text style={[styles.authorName, isMe && { color: Theme.colors.accent }]}>
                             {item.user_name}
                         </Text>
                         <Text style={styles.timestamp}>{timeAgo(item.created_at)}</Text>
@@ -310,7 +327,7 @@ export default function PostLogSheet({ postId, onClose }: PostLogSheetProps) {
             backdropComponent={renderBackdrop}
             footerComponent={renderFooter}
             backgroundStyle={styles.background}
-            handleIndicatorStyle={{ backgroundColor: 'rgba(255,255,255,0.3)', width: 40 }}
+            handleIndicatorStyle={{ backgroundColor: Theme.colors.sheetHandle, width: 40 }}
             handleStyle={{ paddingVertical: 12 }}
         >
             {/* Header */}
@@ -327,7 +344,7 @@ export default function PostLogSheet({ postId, onClose }: PostLogSheetProps) {
             {/* Log list */}
             {isLoading ? (
                 <View style={{ flex: 1, justifyContent: 'center' }}>
-                    <ActivityIndicator color={Theme.colors.secondary} />
+                    <ActivityIndicator color={Theme.colors.textSecondary} />
                 </View>
             ) : (
                 <BottomSheetFlatList<DisplayEntry>
@@ -354,7 +371,7 @@ export default function PostLogSheet({ postId, onClose }: PostLogSheetProps) {
 
 const styles = StyleSheet.create({
     background: {
-        backgroundColor: 'rgba(30,30,30,0.95)',
+        backgroundColor: Theme.colors.sheetBackground,
         borderTopLeftRadius: 20,
         borderTopRightRadius: 20,
     },
@@ -365,10 +382,10 @@ const styles = StyleSheet.create({
         paddingHorizontal: 20,
         paddingVertical: 12,
         borderBottomWidth: StyleSheet.hairlineWidth,
-        borderBottomColor: 'rgba(255,255,255,0.1)',
+        borderBottomColor: Theme.colors.inputBackground,
     },
     headerTitle: {
-        fontFamily: 'Avenir Next',
+        fontFamily: Theme.fonts.base,
         fontSize: 17,
         color: 'rgba(255,255,255,0.9)',
         fontWeight: '600',
@@ -378,35 +395,36 @@ const styles = StyleSheet.create({
         paddingVertical: 10,
     },
     authorName: {
-        fontFamily: 'Avenir Next',
+        fontFamily: Theme.fonts.base,
         fontSize: 14,
         fontWeight: '600',
         color: 'rgba(255,255,255,0.9)',
         marginRight: 8,
     },
     timestamp: {
+        fontFamily: Theme.fonts.mono,
         fontSize: 12,
-        color: 'rgba(255,255,255,0.5)',
+        color: Theme.colors.textSecondary,
     },
     commentBody: {
-        fontFamily: 'Avenir Next',
+        fontFamily: Theme.fonts.base,
         fontSize: 14,
         color: 'rgba(255,255,255,0.9)',
         marginTop: 2,
         lineHeight: 20,
     },
     emptyText: {
-        fontFamily: 'Avenir Next',
+        fontFamily: Theme.fonts.base,
         fontSize: 14,
-        color: 'rgba(255,255,255,0.5)',
+        color: Theme.colors.textSecondary,
         textAlign: 'center',
     },
     input: {
         flex: 1,
-        fontFamily: 'Avenir Next',
+        fontFamily: Theme.fonts.base,
         fontSize: 15,
         color: 'rgba(255,255,255,0.9)',
-        backgroundColor: 'rgba(255,255,255,0.1)',
+        backgroundColor: Theme.colors.inputBackground,
         borderRadius: 20,
         paddingHorizontal: 16,
         paddingVertical: 10,
@@ -427,9 +445,9 @@ const styles = StyleSheet.create({
     },
     repostText: {
         flex: 1,
-        fontFamily: 'Avenir Next',
+        fontFamily: Theme.fonts.base,
         fontSize: 13,
-        color: 'rgba(255,255,255,0.5)',
+        color: Theme.colors.textSecondary,
         fontStyle: 'italic',
     },
     repostName: {
@@ -442,8 +460,8 @@ const styles = StyleSheet.create({
         paddingLeft: 22, // align with the repost text (icon width + gap)
     },
     collapseText: {
-        fontFamily: 'Avenir Next',
+        fontFamily: Theme.fonts.base,
         fontSize: 12,
-        color: 'rgba(255,255,255,0.4)',
+        color: Theme.colors.textTertiary,
     },
 });
