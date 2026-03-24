@@ -1,7 +1,7 @@
 # Yeet — Client Architecture
 
 > **Source of truth for the frontend.** If something contradicts this document, this document wins.
-> Last updated: 2026-03-23
+> Last updated: 2026-03-23 (v1.1.0)
 
 ---
 
@@ -31,9 +31,9 @@
 
 | File | Role |
 |------|------|
-| `src/app/(main)/index.tsx` | Main screen. Renders MatchupView or EmptyState. Floating buttons (account top-left, leaderboard top-right, "+" FAB bottom-center). Orchestrates sync-on-launch and AppState resume. |
-| `src/components/MatchupView.tsx` | **Core component.** Yeet gesture, independent slot state, ladder transitions, seam glow, yeet animation, sound. |
-| `src/components/CardFace.tsx` | Pure video renderer. `useVideoPlayer` + `VideoView`. Accepts `card`, `isPlaying`, `onReady`. |
+| `src/app/(main)/index.tsx` | Main screen. Renders MatchupView or EmptyState. Floating buttons (account top-left, leaderboard top-right, "+" FAB bottom-center). Orchestrates sync-on-launch and AppState resume. No `key` prop on MatchupView — the component manages its own slot state internally. |
+| `src/components/MatchupView.tsx` | **Core component.** Yeet gesture, independent slot state, ladder transitions, seam glow, yeet animation, backend call. Key on `Reanimated.View` (not CardFace) to get fresh native layers after yeet. |
+| `src/components/CardFace.tsx` | Video renderer. `useVideoPlayer` + `VideoView`. Accepts `card`, `isPlaying`, `slot`. Uses `audioMixingMode: 'mixWithOthers'` to prevent iOS audio session conflicts. DEV-only status/playing listeners for debugging. |
 | `src/lib/store.ts` | Zustand store. All backend communication via `supabase.rpc()`. Optimistic cache management. |
 | `src/lib/videoCache.ts` | Local file cache for videos. Downloads to `Paths.cache/videos/`. Sync lookup via `getVideoUri()`. |
 | `src/lib/sounds.ts` | Sound asset exports. Currently just `YEET_SOUND`. |
@@ -50,14 +50,15 @@
 | `src/lib/notifications.ts` | Push token registration. |
 | `src/lib/i18n.ts` | Locale detection + translation helper. |
 | `src/lib/dictionary.ts` | en/fr string dictionary. |
+| `src/theme.ts` | Semantic design tokens (colors + fonts). Single source of truth for all visual constants. |
 
 ### Dead Code (safe to delete)
 
 | File | Reason |
 |------|--------|
-| `src/components/PostLogSheet.tsx` | Exists but not wired to any screen (theme import fixed). |
+| `src/components/PostLogSheet.tsx` | Exists but not wired to any screen. |
 
-Previously deleted: `Postcard.tsx`, `PostcardCapture.tsx`, `postcardLayout.ts`, old `theme.ts`, `random.ts`, `photoProcessor.ts`, `EmojiQuadrant.tsx`. Dead image-picker code in `imageUtils.ts` was also removed (only `uploadCardVideo` remains).
+Previously deleted (v1.1.0): `Postcard.tsx`, `PostcardCapture.tsx`, `PostcardInspector.tsx`, `postcardLayout.ts`, old `theme.ts`, `random.ts`, `photoProcessor.ts`, `EmojiQuadrant.tsx`, `AddressBuilder.tsx`, `CommentsSheet.tsx`, `DualCameraCapture.tsx`, `contacts.ts`, `carnet.tsx`, `first-post.tsx`, `letter/[id].tsx`.
 
 ---
 
@@ -71,37 +72,37 @@ These rules exist because we spent days debugging black screens, frozen videos, 
 
 `replaceAsync()` is also unreliable. The native shared object can be garbage-collected before the promise resolves.
 
-**Instead:** Use React `key` to unmount/remount the entire `CardFace` component when the card changes.
+**Instead:** Use React `key` to unmount/remount the entire component when the card changes.
+
+### Rule 2: Key goes on the `Reanimated.View` wrapper, not on `CardFace`
 
 ```tsx
-<CardFace key={card.id} card={card} isPlaying={true} />
+<Reanimated.View key={topCard.id} style={[styles.videoHalf, topAnimatedStyle]}>
+    <CardFace card={topCard} isPlaying={true} slot="top" />
+</Reanimated.View>
 ```
 
-When `card.id` changes, React unmounts the old `CardFace` (destroying the old player cleanly) and mounts a new one (creating a fresh player with the new URL). No stale state, no orphaned native objects.
+When the card changes, React unmounts the entire `Reanimated.View` and mounts a fresh one. This ensures a **fresh native view and fresh CALayer** for the new VideoView. Putting the key on CardFace only (with a stable Reanimated.View wrapper) caused black screens — the native layer from the previous animation state was reused, and iOS's compositor failed to render the new AVPlayerLayer into the stale container.
 
-### Rule 2: `useVideoPlayer` is called once per CardFace lifetime
+### Rule 3: `useVideoPlayer` is called once per CardFace lifetime
 
 ```tsx
 const player = useVideoPlayer(videoUri, p => {
     p.loop = true;
+    p.audioMixingMode = 'mixWithOthers';
     if (isPlaying) p.play();
 });
 ```
 
 The setup callback runs once. `isPlaying` is read at creation time. There is no `useEffect` to toggle play/pause — the component is always mounted with `isPlaying={true}` and unmounted when no longer needed.
 
-### Rule 3: Use `onFirstFrameRender` to signal readiness
+### Rule 4: Always set `audioMixingMode = 'mixWithOthers'`
 
-```tsx
-<VideoView
-    player={player}
-    onFirstFrameRender={() => onReady?.()}
-/>
-```
+Without this, iOS reconfigures the audio session every time a new VideoPlayer is created. This intermittently pauses sibling players — causing the **surviving card freeze** (video stops, audio may or may not continue). The symptom is `playing=false` events on the surviving card immediately after the dead slot mounts a new CardFace.
 
-The parent (`MatchupView`) uses this to delay the challenger fade-in until the video is actually rendering frames. Without this, the user sees a black rectangle during the load gap.
+With `mixWithOthers`, iOS allows multiple AVPlayers to output simultaneously without session negotiation.
 
-### Rule 4: Use local file cache for instant loads
+### Rule 5: Use local file cache for instant loads
 
 `CardFace` calls `getVideoUri(card.video_url)` synchronously at render time. If the video was prefetched to disk, this returns a `file://` URI. If not, it returns the remote URL and the player downloads directly.
 
@@ -110,24 +111,19 @@ const videoUri = getVideoUri(card.video_url);
 const player = useVideoPlayer(videoUri, ...);
 ```
 
-### Rule 5: Keep yeet animation on the UI thread — never use React state for slot selection
+### Rule 6: Keep yeet animation on the UI thread — never use React state for slot selection
 
 The yeet animation applies `translateY`, `translateX`, `rotate` to the `Reanimated.View` wrapping `CardFace`. The slot being yeeted is tracked with a Reanimated **shared value** (`yeetingSlotSV`), NOT React state. This is critical because:
 
 - React state changes (`setState`) re-render the parent, which triggers native view property updates on BOTH slots
-- On iOS, native layout invalidation (`setNeedsLayout`) on a view hosting an `AVPlayerLayer` can cause the video to freeze (audio continues, video stops rendering frames)
+- On iOS, native layout invalidation (`setNeedsLayout`) on a view hosting an `AVPlayerLayer` can cause the video to freeze
 - Using a shared value keeps the slot selection entirely on the UI thread — the surviving slot's native view is never touched
 
-Each slot has its own `useAnimatedStyle` that reads `yeetingSlotSV` and conditionally applies transforms. Only the dead slot gets transforms; the surviving slot's animated style returns only `{ opacity }` and never changes during the animation.
+Each slot has its own `useAnimatedStyle` that reads `yeetingSlotSV` and conditionally applies transforms. Only the dead slot gets transforms; the surviving slot's animated style returns `{}` and its native view is never invalidated during the animation.
 
-The sequence is:
-1. Yeet triggers → `yeetingSlotSV.value = YEET_TOP | YEET_BOTTOM` (no React re-render)
-2. `requestAnimationFrame` → `withTiming` fires translateY, translateX, rotation
-3. Video keeps playing while spinning off screen (500ms)
-4. After animation: hide slot (opacity 0), `yeetingSlotSV.value = YEET_NONE`, reset transforms
-5. Card swap via `setTopCard`/`setBottomCard` (only the dead slot re-renders via key change)
-6. New CardFace mounts, loads video
-7. `onFirstFrameRender` fires → fade slot back in (60ms)
+### Rule 7: No opacity system — no fade-in, no fade-out
+
+We removed the opacity-based fade-in/fade-out system. It added complexity (safety timeouts, pending-fade refs, slot-ready callbacks) and masked bugs rather than fixing them. The new card mounts and plays immediately. There may be a brief black flash during the CardFace mount cycle — this is acceptable and far less disruptive than the bugs the opacity system introduced.
 
 ---
 
@@ -172,13 +168,13 @@ Only files matching queued matchup videos are kept. Everything else is deleted.
 ### Layout
 
 - Two video slots stacked vertically, each `flex: 1`
-- 2px white seam between them
+- 2px seam between them (Theme.colors.seam — `#2C7B45`)
 - `overflow: 'visible'` on slots (allows yeeted card to fly out of bounds)
 
 ### Gesture (`Gesture.Pan`)
 
 - Touch must start within `SEAM_ZONE_HALF` (40px) of the seam
-- A white radial glow appears and follows the finger
+- A green radial glow appears and follows the finger
 - When `|translationY| > YEET_THRESHOLD` (60px), yeet triggers
 - **Swipe up = top card flies up and off screen. Bottom survives.**
 - **Swipe down = bottom card flies down and off screen. Top survives.**
@@ -192,25 +188,29 @@ Only files matching queued matchup videos are kept. Everything else is deleted.
 | `YEET_TRANSLATE_Y` | `SCREEN_HEIGHT` | Full screen vertical fling |
 | `YEET_TRANSLATE_X_MAX` | 140px | Max lateral drift (randomized 50-100%) |
 | `YEET_ROTATION` | 40deg | Max rotation (randomized 70-100%) |
-| `CHALLENGER_FADE_DURATION` | 60ms | New card fade-in after `onFirstFrameRender` |
 
-### Animation Implementation
+### Animation + Backend Pipeline
 
-The yeet animation runs on the **real video slot** (not an overlay):
+The yeet fires the animation and the backend call **simultaneously**. The card swap happens as soon as the backend responds (~150-200ms), cutting the animation short:
 
-1. `setYeetingSlot(deadSlot)` — applies `yeetStyle` (transforms) to that slot's `Reanimated.View`
-2. `requestAnimationFrame` — ensures React has rendered the style attachment
-3. `withTiming` — fires translateY, translateX, rotation simultaneously
-4. Easing: `Easing.out(Easing.quad)` — starts fast, decelerates (punchy impact feel)
-5. Lateral drift and rotation directions are randomized per yeet
+1. Yeet triggers → `yeetingSlotSV.value = YEET_TOP | YEET_BOTTOM` (no React re-render)
+2. `requestAnimationFrame` → `withTiming` fires translateY, translateX, rotation
+3. **Simultaneously:** `judgeMatchup()` + `syncMatchups()` fire
+4. Backend responds (~150ms) → reset transforms, swap dead slot's card immediately
+5. New `Reanimated.View` mounts (key change) → new `CardFace` loads video
+6. `hasJudgedRef` resets → ready for next yeet
+
+The animation is intentionally cut short. Users perceive the fast swap as snappy responsiveness. The ~150ms of visible animation is enough to convey the "fling" feel.
 
 ### Sound & Haptics
 
 | Event | Effect |
 |-------|--------|
-| Yeet trigger | `Haptics.Heavy` + `yeet.mp3` via `useAudioPlayer` (use `replace()` + `play()`, NOT `seekTo(0)` + `play()` — seekTo is async and can silently kill playback) |
+| Yeet trigger | `Haptics.Heavy` |
 | "+" button press | `Haptics.Medium` |
 | Account/leaderboard buttons | `Haptics.Light` |
+
+**Note:** Yeet sound (`yeet.mp3`) is currently disabled while investigating audio session conflicts. Re-enable after confirming `audioMixingMode: 'mixWithOthers'` fully resolves the surviving card freeze.
 
 ---
 
@@ -254,7 +254,7 @@ judgeMatchup(matchupId, keptCardId, null, streak)
   → If RPC fails: matchup is already removed from cache, judgment is lost but UX continues
 ```
 
-The animation MUST complete before `judgeMatchup` is called (it runs in a `setTimeout(YEET_DURATION + 50)`). If called too early, the component unmounts mid-animation.
+The backend call fires during the yeet animation (not after). MatchupView calls `judgeMatchup` then `syncMatchups` in sequence, and swaps the card as soon as both complete.
 
 ---
 
@@ -273,15 +273,38 @@ const bottomCardIdRef = useRef(initialMatchup.card_b_id);
 const currentMatchupIdRef = useRef(initialMatchup.matchup_id);
 ```
 
+### Render Structure
+
+```tsx
+{/* TOP SLOT — key on Reanimated.View for fresh native layer */}
+<Reanimated.View key={topCard.id} style={[styles.videoHalf, topAnimatedStyle]}>
+    <CardFace card={topCard} isPlaying={true} slot="top" />
+</Reanimated.View>
+
+<View style={styles.seam} />
+
+{/* BOTTOM SLOT */}
+<Reanimated.View key={bottomCard.id} style={[styles.videoHalf, bottomAnimatedStyle]}>
+    <CardFace card={bottomCard} isPlaying={true} slot="bottom" />
+</Reanimated.View>
+```
+
 ### Ladder Transition
 
 When the user yeets and a ladder matchup exists:
 
-1. Only the dead slot's state setter is called (`setTopCard` or `setBottomCard`)
-2. The surviving slot's setter is **never called** — React sees no change, CardFace doesn't re-render, video keeps playing uninterrupted
-3. The dead slot gets a new `key` (card.id changed) → React unmounts old CardFace, mounts new one
-4. `pendingFadeSlotRef` tracks which slot needs to fade in
-5. `onFirstFrameRender` → `handleSlotReady` → `topOpacity` or `bottomOpacity` animates to 1
+1. Backend fires in parallel with animation (~150ms response)
+2. Reset transforms → `yeetingSlotSV.value = YEET_NONE`, all transform values to 0
+3. Only the dead slot's state setter is called (`setTopCard` or `setBottomCard`)
+4. The surviving slot's setter is **never called** — React sees no change, CardFace doesn't re-render, video keeps playing uninterrupted
+5. The dead slot gets a new `key` (card.id changed) → React unmounts old `Reanimated.View`, mounts new one with fresh native layer
+6. New CardFace mounts, loads video from local cache, plays immediately
+
+### No Ladder Matchup (End of Queue)
+
+When `syncMatchups()` returns no ladder matchup for the kept card, `onJudged()` is called, which triggers the parent to show EmptyState.
+
+**Known issue:** The yeet animation gets cut short when this happens (transforms reset abruptly). Needs graceful handling — let the animation finish, then transition to empty state.
 
 ### Streak Tracking
 
@@ -328,11 +351,11 @@ src/app/
 │ [👤]                   [🏆] │  ← Floating buttons (z-index 20)
 │                             │
 │  ┌───────────────────────┐  │
-│  │     TOP VIDEO         │  │  ← CardFace key={topCard.id}
-│  │                       │  │
-│  ├───────────────────────┤  │  ← 2px white seam
-│  │     BOTTOM VIDEO      │  │  ← CardFace key={bottomCard.id}
-│  │                       │  │
+│  │     TOP VIDEO         │  │  ← Reanimated.View key={topCard.id}
+│  │                       │  │     └ CardFace card={topCard}
+│  ├───────────────────────┤  │  ← 2px green seam
+│  │     BOTTOM VIDEO      │  │  ← Reanimated.View key={bottomCard.id}
+│  │                       │  │     └ CardFace card={bottomCard}
 │  └───────────────────────┘  │
 │                             │
 │           [+]               │  ← Glass FAB (56×56)
@@ -341,41 +364,46 @@ src/app/
 
 ---
 
-## Visual Style — "Slime" Palette
+## Visual Style — "Warm Green" Palette
 
 All colors and fonts are defined in `src/theme.ts` and imported as `Theme`. No hardcoded colors anywhere in components.
 
 | Token | Value | Usage |
 |-------|-------|-------|
-| `background` | `#0A0A0A` | App chrome, video slot backgrounds |
-| `surface` | `#141414` | Elevated surfaces (empty state cards) |
-| `surfaceAlt` | `#1A1A1A` | Thumbnail backgrounds |
-| `accent` | `#8ACE00` | Primary brand color — lime green. Seam, CTA buttons, send button, highlights |
-| `accentMuted` | `rgba(138,206,0,0.3)` | Seam glow background |
-| `textPrimary` | `#FFFFFF` | All primary text |
-| `textSecondary` | `rgba(255,255,255,0.5)` | Secondary text, timestamps |
-| `textTertiary` | `rgba(255,255,255,0.35)` | Muted text, hints |
-| `textOnAccent` | `#0A0A0A` | Black text on green buttons |
-| `danger` | `#FF3B30` | Errors, recording indicator (unified — no more #FF4444) |
-| `seam` | `#8ACE00` | The 2px line between video slots (was white) |
-| `seamGlow` | `#8ACE00` | Shadow/glow color on touch near seam (was white) |
-| `fonts.base` | `Verdana` | All UI text (was System/SF Pro) |
+| `background` | `#B7B3AA` | Warm grey — app chrome, video slot backgrounds |
+| `surface` | `#A8A49B` | Elevated surfaces, sheets |
+| `surfaceAlt` | `#9F9B92` | Thumbnail backgrounds, subtle depth |
+| `accent` | `#01E048` | Primary brand green — CTA buttons, highlights, glow |
+| `accentMuted` | `rgba(1,224,72,0.25)` | Seam glow background |
+| `secondary` | `#2C7B45` | Darker forest green — seam, secondary actions |
+| `textPrimary` | `#1A1A1A` | Near-black on warm background |
+| `textSecondary` | `rgba(26,26,26,0.55)` | Secondary text, timestamps |
+| `textTertiary` | `rgba(26,26,26,0.38)` | Muted text, hints |
+| `textOnAccent` | `#1A1A1A` | Dark text on green buttons |
+| `danger` | `#FF3B30` | Errors, recording indicator |
+| `seam` | `#2C7B45` | The 2px line between video slots |
+| `seamGlow` | `#01E048` | Glow color on touch near seam |
+| `fonts.base` | `Verdana` | All UI text |
 | `fonts.mono` | `Menlo` | Numbers: win counts, ranks, timestamps |
 
 Videos remain edge-to-edge, `contentFit="cover"`, no border radius.
 
 ---
 
-## Known Issues & Constraints
+## Known Issues & Next Steps
 
-1. **Video freezing on surviving card after yeet** — Root cause identified: `setYeetingSlot` was React state, causing parent re-renders that triggered native `setNeedsLayout` on the surviving slot's AVPlayerLayer. Fixed by replacing with a Reanimated shared value (`yeetingSlotSV`). If freezes persist, investigate `overflow: 'visible'` causing AVPlayerLayer overlap during animation (potential iOS compositor contention).
+1. **Yeet sound disabled.** `yeet.mp3` playback is commented out while validating that `audioMixingMode: 'mixWithOthers'` fully resolves the surviving card freeze. Re-enable and test with audio on.
 
-2. **Test videos are static colors** — 20 of 26 test videos are solid-color 720×720 MP4s. Makes it hard to spot freezing bugs. Need real motion test videos.
+2. **Surviving card `playing=false` events.** With `audioMixingMode: 'mixWithOthers'`, the surviving card still emits `playing=false` → `playing=true` pairs around yeet transitions, but recovers immediately. These are cosmetic log noise, not visible freezes. Monitor in production — if any `playing=false` does NOT have a matching `playing=true`, that's a real freeze.
 
-3. **Videos are 9:16, not square.** Camera records full sensor frame. Crop guide in VideoCapture is visual only. `contentFit="cover"` handles display cropping.
+3. **End-of-queue handling.** When no ladder matchup exists after a yeet, the animation is cut short and the screen transitions abruptly. Should: let the yeet animation finish, then gracefully transition to EmptyState or reload fresh matchups.
 
-4. **No sound design yet** beyond `yeet.mp3`. No ambient sound, no UI sounds.
+4. **Black flash on card swap.** Between the old CardFace unmounting and the new one rendering its first frame, there's a brief black flash (~50-100ms). Acceptable for now. A future optimization could pre-mount the next CardFace in a hidden layer before the yeet fires.
 
-5. **PostLogSheet exists but is not wired** to any screen. Theme import fixed to use new `src/theme.ts`.
+5. **Test videos are static colors.** 20 of 26 test videos are solid-color 720×720 MP4s. Makes it hard to spot freezing bugs. Need real motion test videos.
 
-6. **Leaderboard fetches full videos for top 5.** At scale (100+ DAU), this is ~10MB per leaderboard open. Acceptable for beta testing. Will need thumbnails or CDN optimization later.
+6. **Videos are 9:16, not square.** Camera records full sensor frame. Crop guide in VideoCapture is visual only. `contentFit="cover"` handles display cropping.
+
+7. **PostLogSheet exists but is not wired** to any screen.
+
+8. **Leaderboard fetches full videos for top 5.** At scale (100+ DAU), this is ~10MB per leaderboard open. Will need thumbnails or CDN optimization later.
