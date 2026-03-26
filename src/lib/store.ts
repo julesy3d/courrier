@@ -63,17 +63,6 @@ export type Matchup = {
     created_at: string;
 };
 
-export type KeptEntry = {
-    card_id: string;
-    my_emoji: EmojiType | null;
-    judged_at: string;
-    video_url: string;
-    emoji_tallies: EmojiTallies;
-    pending_views: number;
-    total_wins: number;
-    creator_username: string;
-};
-
 export type Comment = {
     id: string;
     post_id: string;
@@ -129,10 +118,6 @@ interface CardsStore {
     // --- Post log (unchanged) ---
     fetchPostLog: (postId: string) => Promise<LogEntry[]>;
 
-    // --- Kept History (new — replaces outbox concept) ---
-    cachedKeptHistory: KeptEntry[];
-    fetchKeptHistory: () => Promise<void>;
-
     // --- Outbox (user's created cards) ---
     cachedOutbox: { id: string; video_url: string; emoji_tallies: EmojiTallies; pending_views: number; total_wins: number; created_at: string }[];
     fetchOutbox: () => Promise<void>;
@@ -154,7 +139,6 @@ export const useStore = create<CardsStore>()(
             localeOverride: null,
             cachedMatchups: [],
             isSyncing: false,
-            cachedKeptHistory: [],
             cachedOutbox: [],
 
             // --- Auth (unchanged) ---
@@ -299,12 +283,6 @@ export const useStore = create<CardsStore>()(
                 return data as string; // post_id UUID
             },
 
-            fetchKeptHistory: async () => {
-                const { data, error } = await supabase.rpc('get_kept_history');
-                if (error) throw error;
-                set({ cachedKeptHistory: (data || []) as KeptEntry[] });
-            },
-
             fetchOutbox: async () => {
                 const { currentUser } = get();
                 if (!currentUser) return;
@@ -409,7 +387,6 @@ export const useStore = create<CardsStore>()(
             storage: createJSONStorage(() => AsyncStorage),
             partialize: (state) => ({
                 cachedMatchups: state.cachedMatchups,
-                cachedKeptHistory: state.cachedKeptHistory,
                 cachedOutbox: state.cachedOutbox,
             }),
         }

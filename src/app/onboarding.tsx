@@ -87,7 +87,7 @@ export default function OnboardingScreen() {
                 .single();
 
             if (userData) {
-                await supabase.rpc('backfill_new_user_v2', { p_user_id: userData.id }).catch(console.error);
+                await supabase.rpc('backfill_new_user_v2', { p_user_id: userData.id }).then(null, console.error);
             }
 
             setStep('camera');

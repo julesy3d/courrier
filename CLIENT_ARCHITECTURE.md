@@ -42,8 +42,7 @@
 | `src/components/GlassSurface.tsx` | BlurView wrapper. Used by FAB. |
 | `src/app/(main)/leaderboard.tsx` | Leaderboard screen. Top 5 with looping video previews, rest as text rows. |
 | `src/app/onboarding.tsx` | @username input, uniqueness check, camera permission. |
-| `src/app/(main)/profile.tsx` | Links to kept history + outbox. |
-| `src/app/(main)/kept-history.tsx` | Scrolling list of kept cards. |
+| `src/app/(main)/profile.tsx` | Links to outbox. |
 | `src/app/(main)/outbox.tsx` | User's created cards with stats. |
 | `src/lib/supabase.ts` | Supabase client init. |
 | `src/lib/imageUtils.ts` | `uploadCardVideo()` — uploads MP4 to `card_videos` bucket. |
@@ -218,7 +217,7 @@ The animation is intentionally cut short. Users perceive the fast swap as snappy
 
 ### Zustand with AsyncStorage persistence
 
-Persisted keys: `cachedMatchups`, `cachedKeptHistory`, `cachedOutbox`
+Persisted keys: `cachedMatchups`, `cachedOutbox`
 
 Storage key: `'cards-storage'`
 
@@ -227,7 +226,6 @@ Storage key: `'cards-storage'`
 ```typescript
 Card: { id, video_url, creator_username, emoji_tallies, total_wins, comment_count }
 Matchup: { matchup_id, card_a_id, card_b_id, card_a: Card, card_b: Card, created_at }
-KeptEntry: { card_id, my_emoji (nullable), judged_at, video_url, emoji_tallies, pending_views, total_wins, creator_username }
 ```
 
 ### Sync Flow
@@ -338,7 +336,6 @@ src/app/
     _layout.tsx        — Stack navigator
     index.tsx          — Duel screen (MatchupView)
     profile.tsx        — User profile
-    kept-history.tsx   — Cards user has kept
     outbox.tsx         — Cards user has created
     leaderboard.tsx    — Top videos by wins
     settings.tsx       — Language, account settings

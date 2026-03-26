@@ -8,6 +8,7 @@ import { Paths, File, Directory } from 'expo-file-system';
 
 const CACHE_SUBDIR = 'videos';
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const MAX_CACHE_BYTES = 200 * 1024 * 1024; // 200 MB
 
 // In-flight downloads — prevents duplicate parallel downloads of the same URL
 const inflight = new Map<string, Promise<string>>();
@@ -55,7 +56,18 @@ function getCacheDir(): Directory {
  * This is what CardFace should call at render time — zero async, zero delay.
  */
 export function getVideoUri(remoteUrl: string): string {
-    return resolvedMap.get(remoteUrl) ?? remoteUrl;
+    const cached = resolvedMap.get(remoteUrl);
+    if (cached) {
+        const file = new File(cached);
+        if (file.exists) {
+            return cached;
+        }
+        // File was purged by iOS — remove stale entry and re-download
+        resolvedMap.delete(remoteUrl);
+        prefetchVideo(remoteUrl).catch(() => {});
+        return remoteUrl;
+    }
+    return remoteUrl;
 }
 
 /**
@@ -155,6 +167,43 @@ export function cleanVideoCache(activeUrls: string[] = []): void {
 
         if (removed > 0) {
             console.log(`[videoCache] cleaned ${removed} unused files`);
+        }
+
+        // Enforce size cap on remaining files
+        const remaining = dir.list();
+        const files: File[] = [];
+        let totalSize = 0;
+        for (const entry of remaining) {
+            if (entry instanceof File) {
+                totalSize += entry.size;
+                files.push(entry);
+            }
+        }
+
+        if (totalSize > MAX_CACHE_BYTES) {
+            // Sort oldest first by modification time
+            files.sort((a, b) => (a.modificationTime ?? 0) - (b.modificationTime ?? 0));
+            let evicted = 0;
+            for (const file of files) {
+                if (totalSize <= MAX_CACHE_BYTES) break;
+                if (keepFilenames.has(file.name)) continue;
+                const fileSize = file.size;
+                file.delete();
+                totalSize -= fileSize;
+                evicted++;
+            }
+
+            // Clean up resolvedMap entries for evicted files
+            for (const [url, uri] of resolvedMap.entries()) {
+                const f = new File(uri);
+                if (!f.exists) {
+                    resolvedMap.delete(url);
+                }
+            }
+
+            if (evicted > 0) {
+                console.log(`[videoCache] evicted ${evicted} files to stay under size cap`);
+            }
         }
     } catch (e) {
         console.warn('[videoCache] cleanup error:', e);

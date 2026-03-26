@@ -1,7 +1,7 @@
 # Yeet — Server Architecture
 
 > **Source of truth.** If something contradicts this document, this document wins.
-> Last updated: 2026-03-23
+> Last updated: 2026-03-25
 
 ---
 
@@ -225,11 +225,6 @@ Core judgment function. Called when user swipes.
 }
 ```
 
-### `get_kept_history() → jsonb`
-Returns all cards the authenticated user has kept, one entry per unique card (most recent judgment), sorted by last activity descending.
-
-Includes: `card_id`, `my_emoji` (nullable), `judged_at`, `video_url`, `emoji_tallies`, `pending_views`, `total_wins`, `creator_username`, `last_activity`.
-
 ### `backfill_new_user_v2(p_user_id uuid) → integer`
 Seeds a new user with matchups from high-scoring cards. Reads `backfill_count` from `config` table (currently 5). Both cards in each matchup spend 1 `pending_views`.
 
@@ -327,6 +322,35 @@ These must always hold. If code violates any of these, it's a bug.
 6. **Optimistic cache removal happens BEFORE the RPC call.** The animation must complete before `judgeMatchup` is called, or the component unmounts mid-animation.
 7. **In ladder matchups, `card_a` is always the defender.** The client uses `card_a_id === keptCardId` to identify ladder matchups.
 8. **`pending_views` never goes below 0.** All decrements use `GREATEST(pending_views - 1, 0)`.
+
+---
+
+## Row Level Security (RLS)
+
+All tables have RLS enabled. All RPC functions are `SECURITY DEFINER` and bypass RLS entirely — these policies only gate **direct PostgREST access** (i.e. `supabase.from('table')` calls from the client).
+
+### Policies
+
+| Table | SELECT | INSERT | UPDATE | DELETE |
+|-------|--------|--------|--------|--------|
+| `users` | All authenticated | Own row (`auth_id = auth.uid()`) | Own row (`auth_id = auth.uid()`) | — |
+| `posts` | All authenticated | — (via RPC) | — (via RPC) | — |
+| `matchups` | Own only (`viewer_id` = current user) | — (via RPC) | — (via RPC) | — |
+| `comments` | All authenticated | Own (`author_id` = current user) | — | — |
+| `reposts` | All authenticated | — (via RPC) | — | — |
+| `daily_tops` | All authenticated | — (via RPC) | — | — |
+| `config` | All authenticated | — | — | — |
+
+### Why these policies exist
+
+The client makes direct table calls in a few places:
+- **`users`** — SELECT to load current user by `auth_id`, check username availability; INSERT during onboarding; UPDATE for language change
+- **`posts`** — SELECT to fetch own outbox (`sender_id = currentUser.id`)
+- **`matchups`** — SELECT count of own unjudged matchups on home screen
+- **`comments`** — SELECT for post log; INSERT for adding comments
+- **`reposts`** — SELECT with join to `users` for post log
+
+Everything else (creating cards, judging matchups, generating matchups, backfill, leaderboard, heartbeat) goes through `SECURITY DEFINER` RPCs and is unaffected by RLS.
 
 ---
 

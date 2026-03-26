@@ -37,18 +37,6 @@ export default function ProfileScreen() {
                         style={styles.linkRow}
                         onPress={() => {
                             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                            router.push('/(main)/kept-history' as any);
-                        }}
-                    >
-                        <Ionicons name="albums-outline" size={24} color={Theme.colors.textPrimary} />
-                        <Text style={styles.linkText}>Kept History</Text>
-                        <Ionicons name="chevron-forward" size={20} color={Theme.colors.textTertiary} style={{ marginLeft: 'auto' }} />
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                        style={styles.linkRow}
-                        onPress={() => {
-                            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                             router.push('/(main)/outbox' as any);
                         }}
                     >
