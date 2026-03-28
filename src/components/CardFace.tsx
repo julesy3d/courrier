@@ -36,6 +36,7 @@ export default function CardFace({ card, isPlaying, muted = true, onLoopComplete
     // ── Sync muted state when prop changes ──
     useEffect(() => {
         player.muted = muted;
+        if (__DEV__) console.log(`[CardFace:${slot}] muted=${muted} card=${card.id.slice(0, 8)}`);
     }, [player, muted]);
 
     // ── Notify parent when one loop cycle completes (for audio alternation) ──

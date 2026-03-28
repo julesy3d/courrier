@@ -193,27 +193,38 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
     const [audioSlot, setAudioSlot] = useState<'top' | 'bottom'>(initialAudioSlot);
     const audioSlotRef = useRef<'top' | 'bottom'>(initialAudioSlot);
 
+    const lastAudioSwitchRef = useRef(Date.now());
+    // Minimum time a card keeps the mic before playToEnd can switch it.
+    // Prevents erratic flipping when the receiving card is near its loop end.
+    const AUDIO_MIN_MS = 2000;
+
     const setAudioSlotBoth = useCallback((slot: 'top' | 'bottom') => {
         audioSlotRef.current = slot;
+        lastAudioSwitchRef.current = Date.now();
         setAudioSlot(slot);
+        if (__DEV__) console.log(`[AUDIO] mic → ${slot}`);
     }, []);
 
     // When active card's loop completes → switch mic to the other card.
-    // Guarded by hasJudgedRef to prevent races during yeet transitions.
+    // Guarded by hasJudgedRef (yeet in progress) and cooldown (prevent rapid flipping).
     const onTopLoopComplete = useCallback(() => {
         if (hasJudgedRef.current) return;
-        if (audioSlotRef.current === 'top') {
-            if (__DEV__) console.log('[AUDIO] top loop done → switching to bottom');
-            setAudioSlotBoth('bottom');
+        if (audioSlotRef.current !== 'top') return;
+        if (Date.now() - lastAudioSwitchRef.current < AUDIO_MIN_MS) {
+            if (__DEV__) console.log('[AUDIO] top loop done but cooldown active, skipping');
+            return;
         }
+        setAudioSlotBoth('bottom');
     }, [setAudioSlotBoth]);
 
     const onBottomLoopComplete = useCallback(() => {
         if (hasJudgedRef.current) return;
-        if (audioSlotRef.current === 'bottom') {
-            if (__DEV__) console.log('[AUDIO] bottom loop done → switching to top');
-            setAudioSlotBoth('top');
+        if (audioSlotRef.current !== 'bottom') return;
+        if (Date.now() - lastAudioSwitchRef.current < AUDIO_MIN_MS) {
+            if (__DEV__) console.log('[AUDIO] bottom loop done but cooldown active, skipping');
+            return;
         }
+        setAudioSlotBoth('top');
     }, [setAudioSlotBoth]);
 
     // Track which slot is being yeeted as a shared value (NOT React state).
