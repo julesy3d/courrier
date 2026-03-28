@@ -203,12 +203,12 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
             // Prefetch in background (likely already cached from pool fetch)
             prefetchVideo(challenger.video_url).catch(() => {});
 
-            // Clear ghost after animation completes
+            // Clear ghost after animation completes.
+            // Do NOT reset shared values here — React takes a frame to unmount
+            // the ghost, and resetting transforms to 0 would flash it back to
+            // its original position for one frame. Values reset at next yeet start.
             setTimeout(() => {
                 setGhost(null);
-                yeetTranslateY.value = 0;
-                yeetTranslateX.value = 0;
-                yeetRotation.value = 0;
                 hasJudgedRef.current = false;
                 if (onPhaseChange) onPhaseChange('READY');
             }, YEET_DURATION + 50);
