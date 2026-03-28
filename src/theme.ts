@@ -1,35 +1,36 @@
 export const Theme = {
   colors: {
-    background: '#B7B3AA',           // Warm grey — app chrome, video slot bg
-    surface: '#A8A49B',              // Slightly darker — sheets, elevated cards
-    surfaceAlt: '#9F9B92',           // Thumbnail backgrounds, subtle depth
+    background: '#121212',           // Near-black — app chrome, video slot bg
+    surface: '#1A1A1A',              // Charcoal — sheets, elevated cards
+    surfaceAlt: '#222222',           // Slightly lighter charcoal, subtle depth
 
-    accent: '#01E048',               // Primary brand green
-    accentMuted: 'rgba(1,224,72,0.25)', // Glow, highlights
-    secondary: '#2C7B45',            // Darker green — secondary actions, seam
+    accent: '#E8E4DF',               // Off-white — primary actions
+    accentMuted: 'rgba(232,228,223,0.15)', // Subtle glow, highlights
+    secondary: '#3A3A3A',            // Mid-grey — secondary actions, seam
 
-    textPrimary: '#1A1A1A',          // Near-black on warm bg
-    textSecondary: 'rgba(26,26,26,0.55)',
-    textTertiary: 'rgba(26,26,26,0.38)',
-    textOnAccent: '#1A1A1A',         // Dark text on bright green buttons
+    textPrimary: '#E8E4DF',          // Off-white on dark bg
+    textSecondary: 'rgba(232,228,223,0.50)',
+    textTertiary: 'rgba(232,228,223,0.30)',
+    textOnAccent: '#121212',         // Dark text on off-white buttons
 
-    danger: '#FF3B30',
-    success: 'rgba(1,224,72,0.8)',
+    danger: '#8B4040',               // Muted red
+    success: 'rgba(232,228,223,0.6)',
 
-    buttonBackground: 'rgba(0,0,0,0.15)',
-    buttonBorder: 'rgba(0,0,0,0.12)',
+    buttonBackground: 'rgba(255,255,255,0.08)',
+    buttonBorder: 'rgba(255,255,255,0.10)',
 
-    overlay: 'rgba(0,0,0,0.5)',
-    overlayHeavy: 'rgba(0,0,0,0.85)',
+    overlay: 'rgba(0,0,0,0.6)',
+    overlayHeavy: 'rgba(0,0,0,0.90)',
 
-    seam: '#2C7B45',                 // Secondary green for the divider
-    seamGlow: '#01E048',             // Bright green glow on touch
+    seam: '#2A2A2A',                 // Dark grey divider
+    seamGlow: '#E8E4DF',             // Off-white glow on touch
+    waveformBar: 'rgba(0,0,0,0.6)', // Charcoal bars for audio indicator
 
-    sheetBackground: 'rgba(167,163,154,0.95)',  // Warm grey, translucent
-    sheetHandle: 'rgba(26,26,26,0.25)',
+    sheetBackground: 'rgba(26,26,26,0.95)',  // Charcoal, translucent
+    sheetHandle: 'rgba(232,228,223,0.20)',
 
-    inputBackground: 'rgba(0,0,0,0.07)',
-    inputBorder: 'rgba(0,0,0,0.12)',
+    inputBackground: 'rgba(255,255,255,0.05)',
+    inputBorder: 'rgba(255,255,255,0.08)',
   },
 
   fonts: {

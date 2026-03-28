@@ -1,10 +1,12 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { View, StyleSheet, Dimensions } from 'react-native';
 import Reanimated, {
     SharedValue,
     useSharedValue,
     useAnimatedStyle,
     withTiming,
+    withRepeat,
+    withDelay,
     Easing,
     runOnJS,
 } from 'react-native-reanimated';
@@ -72,6 +74,85 @@ const glowStyles = StyleSheet.create({
 });
 
 
+// ─── Waveform audio indicator ───
+const BAR_COUNT = 30;
+const BAR_WIDTH = 3;
+const BAR_MAX_HEIGHT = 14;
+
+function WaveformBar({ index, active, position }: {
+    index: number;
+    active: boolean;
+    position: 'top' | 'bottom';
+}) {
+    const height = useSharedValue(0);
+
+    useEffect(() => {
+        if (active) {
+            // Each bar gets a unique cycle duration → natural desync over time
+            const duration = 400 + (index * 37) % 300;
+            // Vary max height per bar for organic look
+            const maxH = BAR_MAX_HEIGHT * (0.3 + 0.7 * (((index * 7 + 3) % BAR_COUNT) / BAR_COUNT));
+            height.value = withDelay(
+                index * 20, // stagger entrance
+                withRepeat(
+                    withTiming(maxH, { duration, easing: Easing.inOut(Easing.ease) }),
+                    -1,  // infinite
+                    true, // yo-yo
+                ),
+            );
+        } else {
+            height.value = withTiming(0, { duration: 200 });
+        }
+    }, [active]);
+
+    const animStyle = useAnimatedStyle(() => ({
+        height: height.value,
+    }));
+
+    return (
+        <Reanimated.View
+            style={[
+                {
+                    width: BAR_WIDTH,
+                    borderRadius: BAR_WIDTH / 2,
+                    backgroundColor: Theme.colors.waveformBar,
+                },
+                animStyle,
+            ]}
+        />
+    );
+}
+
+function WaveformBars({ active, position }: { active: boolean; position: 'top' | 'bottom' }) {
+    return (
+        <View
+            style={[
+                waveformStyles.container,
+                position === 'top'
+                    ? { top: 0, alignItems: 'flex-start' }
+                    : { bottom: 0, alignItems: 'flex-end' },
+            ]}
+            pointerEvents="none"
+        >
+            {Array.from({ length: BAR_COUNT }, (_, i) => (
+                <WaveformBar key={i} index={i} active={active} position={position} />
+            ))}
+        </View>
+    );
+}
+
+const waveformStyles = StyleSheet.create({
+    container: {
+        position: 'absolute',
+        left: 8,
+        right: 8,
+        height: BAR_MAX_HEIGHT,
+        flexDirection: 'row',
+        justifyContent: 'space-evenly',
+        zIndex: 5,
+    },
+});
+
 interface MatchupViewProps {
     initialCardA: Card;
     initialCardB: Card;
@@ -104,6 +185,36 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
 
     // Ghost overlay: the yeeted card flies away on top while the new challenger appears underneath
     const [ghost, setGhost] = useState<{ card: Card; slot: 'top' | 'bottom' } | null>(null);
+
+    // ═══════════════════════════════════════════════════════════════
+    // AUDIO ALTERNATION — one card has the mic at a time
+    // ═══════════════════════════════════════════════════════════════
+    const initialAudioSlot = Math.random() > 0.5 ? 'top' : 'bottom' as const;
+    const [audioSlot, setAudioSlot] = useState<'top' | 'bottom'>(initialAudioSlot);
+    const audioSlotRef = useRef<'top' | 'bottom'>(initialAudioSlot);
+
+    const setAudioSlotBoth = useCallback((slot: 'top' | 'bottom') => {
+        audioSlotRef.current = slot;
+        setAudioSlot(slot);
+    }, []);
+
+    // When active card's loop completes → switch mic to the other card.
+    // Guarded by hasJudgedRef to prevent races during yeet transitions.
+    const onTopLoopComplete = useCallback(() => {
+        if (hasJudgedRef.current) return;
+        if (audioSlotRef.current === 'top') {
+            if (__DEV__) console.log('[AUDIO] top loop done → switching to bottom');
+            setAudioSlotBoth('bottom');
+        }
+    }, [setAudioSlotBoth]);
+
+    const onBottomLoopComplete = useCallback(() => {
+        if (hasJudgedRef.current) return;
+        if (audioSlotRef.current === 'bottom') {
+            if (__DEV__) console.log('[AUDIO] bottom loop done → switching to top');
+            setAudioSlotBoth('top');
+        }
+    }, [setAudioSlotBoth]);
 
     // Track which slot is being yeeted as a shared value (NOT React state).
     // Using React state here caused re-renders that triggered native layout
@@ -200,6 +311,9 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
                 bottomCardObjRef.current = challenger;
             }
 
+            // New challenger gets the mic immediately
+            setAudioSlotBoth(deadSlot);
+
             // Prefetch in background (likely already cached from pool fetch)
             prefetchVideo(challenger.video_url).catch(() => {});
 
@@ -224,7 +338,7 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
             }, SWAP_DELAY_MS);
         }
 
-    }, [reportJudgment, popChallenger, onJudged, onPhaseChange]);
+    }, [reportJudgment, popChallenger, onJudged, onPhaseChange, setAudioSlotBoth]);
 
     // --- Gesture ---
     const panGesture = Gesture.Pan()
@@ -315,6 +429,8 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
                         <CardFace
                             card={topCard}
                             isPlaying={true}
+                            muted={audioSlot !== 'top'}
+                            onLoopComplete={onTopLoopComplete}
                             slot="top"
                         />
                     </Reanimated.View>
@@ -330,6 +446,8 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
                         <CardFace
                             card={bottomCard}
                             isPlaying={true}
+                            muted={audioSlot !== 'bottom'}
+                            onLoopComplete={onBottomLoopComplete}
                             slot="bottom"
                         />
                     </Reanimated.View>
@@ -355,12 +473,16 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
                             ]}
                             pointerEvents="none"
                         >
-                            <CardFace card={ghost.card} isPlaying={true} slot="ghost" />
+                            <CardFace card={ghost.card} isPlaying={true} muted={true} slot="ghost" />
                         </Reanimated.View>
                     )}
 
                 </Reanimated.View>
             </GestureDetector>
+
+            {/* Waveform audio indicators — flush with screen edges */}
+            <WaveformBars active={audioSlot === 'top'} position="top" />
+            <WaveformBars active={audioSlot === 'bottom'} position="bottom" />
         </View>
     );
 }
