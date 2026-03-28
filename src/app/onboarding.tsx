@@ -79,17 +79,6 @@ export default function OnboardingScreen() {
             const lang = Localization.getLocales()[0]?.languageCode?.startsWith('fr') ? 'fr' : 'en';
             await createUser(trimmed, lang);
 
-            // Backfill matchups for new user
-            const { data: userData } = await supabase
-                .from('users')
-                .select('id')
-                .eq('auth_id', (await supabase.auth.getSession()).data.session?.user.id)
-                .single();
-
-            if (userData) {
-                await supabase.rpc('backfill_new_user_v2', { p_user_id: userData.id }).then(null, console.error);
-            }
-
             setStep('camera');
         } catch (e) {
             console.error('Onboarding error:', e);

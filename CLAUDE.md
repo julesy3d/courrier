@@ -21,14 +21,21 @@ These are the source of truth. If code contradicts the docs, the docs win. If yo
 - **`audioMixingMode: 'mixWithOthers'`** on every VideoPlayer. Without it, iOS pauses sibling players.
 - **No opacity fade system.** We removed it. Don't add it back.
 - **Never use React state for yeet slot selection.** Use Reanimated shared values only. React state re-renders cause AVPlayerLayer freezes.
+- **All mutable slot data in `handleYeet` must use refs, not state.** Card IDs and sender IDs are tracked in refs (`topCardIdRef`, `bottomCardIdRef`, `topSenderIdRef`, `bottomSenderIdRef`). Reading React state in `handleYeet` creates stale closures.
+- **`reportJudgment` is fire-and-forget.** Never await it. Never put it on the critical path.
 - **All colors come from `src/theme.ts`.** No hardcoded color values in components.
 
-## Current state (v1.1.0)
+## Current state (v1.2.0 — Card Pool Architecture)
 
-- Video playback works but yeet sound is disabled (investigating audio session conflicts)
-- End-of-queue handling is abrupt (animation cuts short when no ladder matchup exists)
-- Brief black flash between card swaps (~50-100ms) — acceptable for now
-- `playing=false` → `playing=true` events still fire on surviving cards but recover immediately
+- Matchup pairing is fully client-side. Server is a card vending machine + scoreboard.
+- `reportJudgment` is fire-and-forget. Zero RPCs on the gameplay critical path.
+- Video prefetch queue downloads 3 at a time, front-of-pool first.
+- Initial 2 videos are awaited on disk before display (loading spinner until ready).
+- Swap gate: `max(200ms, prefetch)` with 2s timeout fallback to remote streaming.
+- Stale pool cards return fuel to server on cold start via `return_unused_cards`.
+- Yeet sound is disabled (investigating audio session conflicts).
+- Ghost overlay system: dead card flies away on top while new card mounts underneath. Eliminates grey dead zone.
+- `playing=false` → `playing=true` events still fire on surviving cards but recover immediately.
 
 ## Stack
 

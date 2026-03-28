@@ -1,7 +1,7 @@
 # Yeet — Client Architecture
 
 > **Source of truth for the frontend.** If something contradicts this document, this document wins.
-> Last updated: 2026-03-23 (v1.1.0)
+> Last updated: 2026-03-27 (v1.2.0 — Card Pool Architecture)
 
 ---
 
@@ -31,10 +31,10 @@
 
 | File | Role |
 |------|------|
-| `src/app/(main)/index.tsx` | Main screen. Renders MatchupView or EmptyState. Floating buttons (account top-left, leaderboard top-right, "+" FAB bottom-center). Orchestrates sync-on-launch and AppState resume. No `key` prop on MatchupView — the component manages its own slot state internally. |
-| `src/components/MatchupView.tsx` | **Core component.** Yeet gesture, independent slot state, ladder transitions, seam glow, yeet animation, backend call. Key on `Reanimated.View` (not CardFace) to get fresh native layers after yeet. |
+| `src/app/(main)/index.tsx` | Main screen. Renders MatchupView or EmptyState. Floating buttons (account top-left, leaderboard top-right, "+" FAB bottom-center). Manages card pool lifecycle: initial fetch, pool-to-matchup popping, refill on resume. |
+| `src/components/MatchupView.tsx` | **Core component.** Yeet gesture, independent slot state, local matchup sequencing (winner stays, next challenger from pool), seam glow, yeet animation. Judgment is fire-and-forget. Key on `Reanimated.View` (not CardFace) for fresh native layers. |
 | `src/components/CardFace.tsx` | Video renderer. `useVideoPlayer` + `VideoView`. Accepts `card`, `isPlaying`, `slot`. Uses `audioMixingMode: 'mixWithOthers'` to prevent iOS audio session conflicts. DEV-only status/playing listeners for debugging. |
-| `src/lib/store.ts` | Zustand store. All backend communication via `supabase.rpc()`. Optimistic cache management. |
+| `src/lib/store.ts` | Zustand store. Card pool management (`fetchCardPool`, `popChallenger`), fire-and-forget judgment (`reportJudgment`), all backend communication via `supabase.rpc()`. |
 | `src/lib/videoCache.ts` | Local file cache for videos. Downloads to `Paths.cache/videos/`. Sync lookup via `getVideoUri()`. |
 | `src/lib/sounds.ts` | Sound asset exports. Currently just `YEET_SOUND`. |
 | `src/components/VideoCapture.tsx` | Hold-to-record (5s), crop guide, shutter button. |
@@ -141,24 +141,28 @@ Remote URL → localFilename() → deterministic filename
 | Function | Sync/Async | Purpose |
 |----------|-----------|---------|
 | `getVideoUri(url)` | **Sync** | Returns local URI if cached, remote URL otherwise. Called by CardFace at render time. |
-| `prefetchVideo(url)` | Async | Downloads to disk. Deduplicates in-flight downloads. Populates `resolvedMap`. |
-| `prefetchMatchupVideos(matchups)` | Fire-and-forget | Prefetches all video URLs from a batch of matchups. |
-| `cleanVideoCache(activeUrls)` | Sync | Deletes cached files NOT in the active URL list. Called on app startup after sync. |
+| `prefetchVideo(url)` | Async | Downloads to disk. Deduplicates in-flight downloads. Populates `resolvedMap`. Returns promise that resolves when file is on disk. |
+| `prefetchCardVideos(cards)` | Fire-and-forget | Queues videos for concurrency-limited download (max 3 at a time, front-of-pool first). |
+| `cleanVideoCache(activeUrls)` | Sync | Deletes cached files NOT in the active URL list. Enforces 200MB cap with LRU eviction. |
 | `clearVideoCache()` | Sync | Nuclear option. Deletes entire cache directory. |
+
+### Prefetch concurrency model
+
+Downloads are limited to 3 concurrent via an internal queue (`prefetchQueue`). Cards are enqueued in pool order, so the next cards the user will see download first. Direct `prefetchVideo()` calls (from `initPool` or `handleYeet`) bypass the queue and get inflight deduplication — this gives swap-critical downloads priority over the background queue.
 
 ### When prefetching happens
 
-1. `syncMatchups()` in the store calls `prefetchMatchupVideos(trulyNew)` after merging new matchups
-2. This fires `prefetchVideo()` for every video URL in the new matchups (fire-and-forget)
-3. By the time the user swipes and the next CardFace mounts, the video is likely on disk
+1. `fetchCardPool()` in the store calls `prefetchCardVideos(newCards)` after appending to pool — enqueues all videos for background download (max 3 at a time)
+2. **Initial display:** `initPool()` explicitly awaits `prefetchVideo()` for the first 2 cards before setting `isLoading = false`. The loading spinner stays until both videos are on disk.
+3. **Swap gate:** In `handleYeet`, the card swap waits for `prefetchVideo(challenger.video_url)` with a **2s timeout**. On warm cache this resolves instantly. On slow connection, if the download isn't done in 2s, the swap proceeds with the remote URL (player streams it) rather than freezing the UI.
 
 ### When cleanup happens
 
-On app startup, after `syncMatchups()` populates the cache:
+On app startup, after `fetchCardPool()` and initial prefetch:
 ```
-syncAll() → syncMatchups() → get active URLs → cleanVideoCache(activeUrls)
+initPool() → returnUnusedCards (stale pool) → fetchCardPool() → await first 2 videos → cleanVideoCache(activeUrls)
 ```
-Only files matching queued matchup videos are kept. Everything else is deleted.
+Only files matching pool video URLs are kept. Everything else is deleted.
 
 ---
 
@@ -188,18 +192,23 @@ Only files matching queued matchup videos are kept. Everything else is deleted.
 | `YEET_TRANSLATE_X_MAX` | 140px | Max lateral drift (randomized 50-100%) |
 | `YEET_ROTATION` | 40deg | Max rotation (randomized 70-100%) |
 
-### Animation + Backend Pipeline
+### Animation + Swap Pipeline (v1.2.0 — Ghost Overlay)
 
-The yeet fires the animation and the backend call **simultaneously**. The card swap happens as soon as the backend responds (~150-200ms), cutting the animation short:
+The yeet mounts a "ghost" overlay with the dead card flying away, while the slot underneath swaps to the new challenger immediately. The new card starts playing behind the ghost.
 
-1. Yeet triggers → `yeetingSlotSV.value = YEET_TOP | YEET_BOTTOM` (no React re-render)
-2. `requestAnimationFrame` → `withTiming` fires translateY, translateX, rotation
-3. **Simultaneously:** `judgeMatchup()` + `syncMatchups()` fire
-4. Backend responds (~150ms) → reset transforms, swap dead slot's card immediately
-5. New `Reanimated.View` mounts (key change) → new `CardFace` loads video
-6. `hasJudgedRef` resets → ready for next yeet
+1. Yeet triggers → animation shared values reset to 0
+2. `requestAnimationFrame` → `withTiming` fires translateY, translateX, rotation (500ms)
+3. **Immediately:** `popChallenger()` pops next card from pool (instant, local)
+4. **Immediately:** `reportJudgment()` fires in background (NEVER awaited)
+5. **Immediately:** Ghost state set (dead card + slot) — mounts an absolutely-positioned `CardFace` overlay
+6. **Immediately:** Dead slot's card set to challenger (key change → new `Reanimated.View` + `CardFace` mount underneath ghost)
+7. Ghost reads the same animation shared values → flies away with translateY/X + rotation
+8. New challenger's `CardFace` starts playing underneath — visible as ghost moves off screen
+9. After `YEET_DURATION + 50ms`: ghost cleared, animation values reset, `hasJudgedRef` resets → ready for next yeet
 
-The animation is intentionally cut short. Users perceive the fast swap as snappy responsiveness. The ~150ms of visible animation is enough to convey the "fling" feel.
+**Pool empty fallback:** When `popChallenger()` returns null, no ghost is used. `yeetingSlotSV` drives the slot animation directly (old behavior), then `onJudged()` is called.
+
+**Key insight:** Three `VideoPlayer`s are briefly active (survivor + new challenger + ghost). `audioMixingMode: 'mixWithOthers'` prevents iOS audio session conflicts. The ghost's player starts from the beginning of the dead card's video, but this is imperceptible during a fast fly-away with rotation.
 
 ### Sound & Haptics
 
@@ -217,42 +226,69 @@ The animation is intentionally cut short. Users perceive the fast swap as snappy
 
 ### Zustand with AsyncStorage persistence
 
-Persisted keys: `cachedMatchups`, `cachedOutbox`
+Persisted keys: `cardPool`, `poolExcludeIds`, `cachedOutbox`
 
 Storage key: `'cards-storage'`
 
 ### Key Types
 
 ```typescript
-Card: { id, video_url, creator_username, emoji_tallies, total_wins, comment_count }
-Matchup: { matchup_id, card_a_id, card_b_id, card_a: Card, card_b: Card, created_at }
+Card: { id, video_url, sender_id, creator_username, emoji_tallies, total_wins, comment_count }
 ```
 
-### Sync Flow
+`Matchup` type has been removed. Matchup pairing is now done client-side.
+
+### Pool Fetch Flow
 
 ```
-App opens / AppState → 'active'
-  → syncAll()
-    → Clear cachedMatchups (start fresh from server)
+App opens
+  → initPool()
     → heartbeat()
-    → syncMatchups()
-      → RPC sync_matchups(p_after: highWaterMark)
-      → Deduplicate, merge into cachedMatchups
-      → prefetchMatchupVideos(newMatchups)
-    → fetchActiveCount()
+    → if pool has stale cards from previous session:
+      → returnUnusedCards(staleIds) — fire-and-forget fuel refund
+      → clear cardPool + poolExcludeIds
+    → fetchCardPool(10)
+      → RPC fetch_card_pool(10, poolExcludeIds)
+      → Append to cardPool, update poolExcludeIds
+      → prefetchCardVideos(newCards)
     → cleanVideoCache(activeUrls)
+  → Pop first 2 cards from pool → pass as initialCardA/B to MatchupView
+
+AppState → 'active' (resume)
+  → if pool < 5: fetchCardPool(10) in background
 ```
 
-### Judgment Flow (Optimistic)
+### Judgment Flow (Fire-and-Forget)
 
 ```
-judgeMatchup(matchupId, keptCardId, null, streak)
-  → IMMEDIATELY: remove matchup from cachedMatchups
-  → THEN: RPC judge_matchup(...)
-  → If RPC fails: matchup is already removed from cache, judgment is lost but UX continues
+reportJudgment(cardAId, cardBId, keptCardId, emoji, streak)
+  → Fire RPC report_judgment(...) — DO NOT AWAIT
+  → On error: console.warn (no retry queue yet)
+  → The client has already moved to the next matchup
 ```
 
-The backend call fires during the yeet animation (not after). MatchupView calls `judgeMatchup` then `syncMatchups` in sequence, and swaps the card as soon as both complete.
+### Fuel Return (Stale Pool Cleanup)
+
+```
+returnUnusedCards(cardIds)
+  → Fire RPC return_unused_cards(...) — DO NOT AWAIT
+  → Called on app open when pool has leftover cards from a previous session
+  → Pool and poolExcludeIds are cleared before fetching fresh
+```
+
+### Store Actions
+
+| Action | What it does | Blocks UI? |
+|--------|-------------|------------|
+| `fetchCardPool(count, excludeIds)` | RPC → append cards to pool → prefetch videos | No (async, UI shows loading only on first load) |
+| `popChallenger(currentCardIds, excludeSenderIds)` | Pop next card from pool, avoid same-creator if possible | No (instant, synchronous) |
+| `reportJudgment(...)` | Fire-and-forget RPC call | **Never** |
+| `returnUnusedCards(cardIds)` | Fire-and-forget fuel refund for unplayed pool cards | **Never** |
+| `heartbeat()` | Update `last_active_at` | No |
+
+### Why `syncMatchups` and `judgeMatchup` were removed
+
+In v1.1.0, the judgment flow was: `await judgeMatchup()` → `await syncMatchups()` → find ladder matchup → swap card. Two sequential RPCs on the critical path. In v1.2.0, there are zero RPCs on the critical path. The pool is pre-loaded, the swap is local, and the judgment is background-only.
 
 ---
 
@@ -263,13 +299,18 @@ This is the most important architectural decision in the frontend. Each video sl
 ### State
 
 ```typescript
-const [topCard, setTopCard] = useState<Card>(initialMatchup.card_a);
-const [bottomCard, setBottomCard] = useState<Card>(initialMatchup.card_b);
+const [topCard, setTopCard] = useState<Card>(initialCardA);
+const [bottomCard, setBottomCard] = useState<Card>(initialCardB);
 
-const topCardIdRef = useRef(initialMatchup.card_a_id);
-const bottomCardIdRef = useRef(initialMatchup.card_b_id);
-const currentMatchupIdRef = useRef(initialMatchup.matchup_id);
+const topCardIdRef = useRef(initialCardA.id);
+const bottomCardIdRef = useRef(initialCardB.id);
+const topSenderIdRef = useRef(initialCardA.sender_id);
+const bottomSenderIdRef = useRef(initialCardB.sender_id);
 ```
+
+All mutable data read inside `handleYeet` uses refs (not state) to avoid stale closures. `setTopCard`/`setBottomCard` are only used as setters — their current values are never read inside the callback.
+
+`currentMatchupIdRef` has been removed — there is no server-created matchup ID. Matchup pairing is local.
 
 ### Render Structure
 
@@ -287,22 +328,21 @@ const currentMatchupIdRef = useRef(initialMatchup.matchup_id);
 </Reanimated.View>
 ```
 
-### Ladder Transition
+### Card Swap (v1.2.0 — Ghost Overlay)
 
-When the user yeets and a ladder matchup exists:
+When the user yeets:
 
-1. Backend fires in parallel with animation (~150ms response)
-2. Reset transforms → `yeetingSlotSV.value = YEET_NONE`, all transform values to 0
-3. Only the dead slot's state setter is called (`setTopCard` or `setBottomCard`)
-4. The surviving slot's setter is **never called** — React sees no change, CardFace doesn't re-render, video keeps playing uninterrupted
-5. The dead slot gets a new `key` (card.id changed) → React unmounts old `Reanimated.View`, mounts new one with fresh native layer
-6. New CardFace mounts, loads video from local cache, plays immediately
+1. `popChallenger()` pops next card from local pool (instant)
+2. `reportJudgment()` fires in background (never awaited)
+3. Ghost overlay mounts with dead card — absolutely positioned over the dead slot, `zIndex: 10`
+4. Dead slot's card state set to challenger immediately — new `Reanimated.View` (key change) mounts underneath the ghost
+5. Ghost reads animation shared values and flies away (500ms) — new card plays underneath
+6. The surviving slot's setter is **never called** — React sees no change, CardFace doesn't re-render, video keeps playing uninterrupted
+7. After animation: ghost cleared, transforms reset → ready for next yeet
 
-### No Ladder Matchup (End of Queue)
+### Pool Empty (End of Queue)
 
-When `syncMatchups()` returns no ladder matchup for the kept card, `onJudged()` is called, which triggers the parent to show EmptyState.
-
-**Known issue:** The yeet animation gets cut short when this happens (transforms reset abruptly). Needs graceful handling — let the animation finish, then transition to empty state.
+When `popChallenger()` returns null (pool exhausted), the yeet animation plays to completion, then `onJudged()` is called. The parent (index.tsx) attempts to refill the pool. If refill succeeds, a new MatchupView is mounted. If not, EmptyState is shown.
 
 ### Streak Tracking
 
@@ -391,11 +431,11 @@ Videos remain edge-to-edge, `contentFit="cover"`, no border radius.
 
 1. **Yeet sound disabled.** `yeet.mp3` playback is commented out while validating that `audioMixingMode: 'mixWithOthers'` fully resolves the surviving card freeze. Re-enable and test with audio on.
 
-2. **Surviving card `playing=false` events.** With `audioMixingMode: 'mixWithOthers'`, the surviving card still emits `playing=false` → `playing=true` pairs around yeet transitions, but recovers immediately. These are cosmetic log noise, not visible freezes. Monitor in production — if any `playing=false` does NOT have a matching `playing=true`, that's a real freeze.
+2. **Surviving card `playing=false` events.** With `audioMixingMode: 'mixWithOthers'`, the surviving card still emits `playing=false` → `playing=true` pairs around yeet transitions, but recovers immediately. These are cosmetic log noise, not visible freezes.
 
-3. **End-of-queue handling.** When no ladder matchup exists after a yeet, the animation is cut short and the screen transitions abruptly. Should: let the yeet animation finish, then gracefully transition to EmptyState or reload fresh matchups.
+3. **No judgment retry queue.** `reportJudgment` is fire-and-forget. If the network call fails, that judgment is lost. Acceptable for beta (low volume). At scale, add a local outbox that retries on app resume.
 
-4. **Black flash on card swap.** Between the old CardFace unmounting and the new one rendering its first frame, there's a brief black flash (~50-100ms). Acceptable for now. A future optimization could pre-mount the next CardFace in a hidden layer before the yeet fires.
+4. **Black flash on card swap.** Largely mitigated by the ghost overlay — the dead card flies away on top while the new CardFace mounts and starts rendering underneath. The ghost covers the mount cycle. Any remaining flash is hidden behind the ghost during the 500ms animation.
 
 5. **Test videos are static colors.** 20 of 26 test videos are solid-color 720×720 MP4s. Makes it hard to spot freezing bugs. Need real motion test videos.
 
@@ -404,3 +444,5 @@ Videos remain edge-to-edge, `contentFit="cover"`, no border radius.
 7. **PostLogSheet exists but is not wired** to any screen.
 
 8. **Leaderboard fetches full videos for top 5.** At scale (100+ DAU), this is ~10MB per leaderboard open. Will need thumbnails or CDN optimization later.
+
+9. **Pool persistence across sessions.** `cardPool` and `poolExcludeIds` are persisted to AsyncStorage. On cold start, stale cards are returned to the server via `returnUnusedCards` (fire-and-forget fuel refund), the pool is cleared, and a fresh batch is fetched. This prevents fuel loss from unplayed cards.

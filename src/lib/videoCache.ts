@@ -118,20 +118,43 @@ export async function prefetchVideo(url: string): Promise<string> {
     return downloadPromise;
 }
 
-/**
- * Prefetch all videos from a list of matchups. Fire-and-forget.
- */
-export function prefetchMatchupVideos(matchups: Array<{ card_a: { video_url: string }; card_b: { video_url: string } }>): void {
-    for (const m of matchups) {
-        prefetchVideo(m.card_a.video_url).catch(() => { });
-        prefetchVideo(m.card_b.video_url).catch(() => { });
+// ═══════════════════════════════════════════════
+// CONCURRENCY-LIMITED PREFETCH QUEUE
+// Downloads front-of-pool first, max 3 at a time.
+// Direct prefetchVideo() calls bypass the queue
+// (for swap-gate priority) and dedup via inflight.
+// ═══════════════════════════════════════════════
+
+const PREFETCH_CONCURRENCY = 3;
+const prefetchQueue: string[] = [];
+let prefetchActive = 0;
+
+function drainPrefetchQueue(): void {
+    while (prefetchActive < PREFETCH_CONCURRENCY && prefetchQueue.length > 0) {
+        const url = prefetchQueue.shift()!;
+        prefetchActive++;
+        prefetchVideo(url).catch(() => {}).finally(() => {
+            prefetchActive--;
+            drainPrefetchQueue();
+        });
     }
 }
 
 /**
+ * Queue videos for concurrency-limited prefetch. Fire-and-forget.
+ * Cards are downloaded front-to-back (pool order = priority order).
+ */
+export function prefetchCardVideos(cards: Array<{ video_url: string }>): void {
+    for (const c of cards) {
+        prefetchQueue.push(c.video_url);
+    }
+    drainPrefetchQueue();
+}
+
+/**
  * Clean up cached files that are NOT needed by current matchups.
- * Call on app startup AFTER syncMatchups has populated cachedMatchups.
- * Pass the set of video URLs that are currently in the queue (matchups).
+ * Call on app startup AFTER card pool is loaded.
+ * Pass the set of video URLs that are currently in the pool.
  */
 export function cleanVideoCache(activeUrls: string[] = []): void {
     try {

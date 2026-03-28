@@ -11,8 +11,9 @@ import Reanimated, {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
 import { useAudioPlayer } from 'expo-audio';
-import { Matchup, Card, useStore } from '../lib/store';
+import { Card, useStore } from '../lib/store';
 import CardFace from './CardFace';
+import { prefetchVideo } from '../lib/videoCache';
 import { YEET_SOUND } from '../lib/sounds';
 import { Theme } from '../theme';
 
@@ -32,6 +33,9 @@ const YEET_DURATION = 500;
 const YEET_TRANSLATE_Y = SCREEN_HEIGHT;
 const YEET_TRANSLATE_X_MAX = 140;
 const YEET_ROTATION = 40;
+
+// Delay before ending when pool is empty (let animation play)
+const SWAP_DELAY_MS = 200;
 
 export type Phase = 'READY' | 'YEETING';
 
@@ -69,13 +73,14 @@ const glowStyles = StyleSheet.create({
 
 
 interface MatchupViewProps {
-    matchup: Matchup;
+    initialCardA: Card;
+    initialCardB: Card;
     onJudged: () => void;
     onPhaseChange?: (phase: Phase) => void;
 }
 
-export default function MatchupView({ matchup: initialMatchup, onJudged, onPhaseChange }: MatchupViewProps) {
-    const { judgeMatchup, syncMatchups } = useStore();
+export default function MatchupView({ initialCardA, initialCardB, onJudged, onPhaseChange }: MatchupViewProps) {
+    const { reportJudgment, popChallenger } = useStore();
     const yeetPlayer = useAudioPlayer(YEET_SOUND);
     const hasJudgedRef = useRef(false);
     const streakRef = useRef(0);
@@ -85,12 +90,20 @@ export default function MatchupView({ matchup: initialMatchup, onJudged, onPhase
     // ═══════════════════════════════════════════════════════════════
     // INDEPENDENT SLOT STATE
     // ═══════════════════════════════════════════════════════════════
-    const [topCard, setTopCard] = useState<Card>(initialMatchup.card_a);
-    const [bottomCard, setBottomCard] = useState<Card>(initialMatchup.card_b);
+    const [topCard, setTopCard] = useState<Card>(initialCardA);
+    const [bottomCard, setBottomCard] = useState<Card>(initialCardB);
 
-    const currentMatchupIdRef = useRef(initialMatchup.matchup_id);
-    const topCardIdRef = useRef(initialMatchup.card_a_id);
-    const bottomCardIdRef = useRef(initialMatchup.card_b_id);
+    const topCardIdRef = useRef(initialCardA.id);
+    const bottomCardIdRef = useRef(initialCardB.id);
+    const topSenderIdRef = useRef(initialCardA.sender_id);
+    const bottomSenderIdRef = useRef(initialCardB.sender_id);
+
+    // Full card objects in refs (for ghost overlay — avoids stale closures in handleYeet)
+    const topCardObjRef = useRef<Card>(initialCardA);
+    const bottomCardObjRef = useRef<Card>(initialCardB);
+
+    // Ghost overlay: the yeeted card flies away on top while the new challenger appears underneath
+    const [ghost, setGhost] = useState<{ card: Card; slot: 'top' | 'bottom' } | null>(null);
 
     // Track which slot is being yeeted as a shared value (NOT React state).
     // Using React state here caused re-renders that triggered native layout
@@ -101,14 +114,6 @@ export default function MatchupView({ matchup: initialMatchup, onJudged, onPhase
     const yeetTranslateY = useSharedValue(0);
     const yeetTranslateX = useSharedValue(0);
     const yeetRotation = useSharedValue(0);
-
-    // Ref to hold pre-fetched backend result so we can swap instantly at animation end
-    const pendingSwapRef = useRef<{
-        deadSlot: 'top' | 'bottom';
-        challengerCard: Card;
-        challengerCardId: string;
-        matchupId: string;
-    } | null>(null);
 
     // --- Glow state ---
     const glowX = useSharedValue(0);
@@ -123,7 +128,6 @@ export default function MatchupView({ matchup: initialMatchup, onJudged, onPhase
     const handleYeet = useCallback((direction: 'up' | 'down') => {
         if (hasJudgedRef.current) return;
         hasJudgedRef.current = true;
-        const t0 = Date.now();
 
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
         // DEBUG: yeet sound disabled to test if freeze is audio-related
@@ -145,11 +149,10 @@ export default function MatchupView({ matchup: initialMatchup, onJudged, onPhase
         }
         const currentStreak = streakRef.current;
 
-        // ── Mark which slot is being yeeted (shared value, no React re-render) ──
+        // ── Reset animation values ──
         yeetTranslateY.value = 0;
         yeetTranslateX.value = 0;
         yeetRotation.value = 0;
-        yeetingSlotSV.value = deadSlot === 'top' ? YEET_TOP : YEET_BOTTOM;
 
         // ── Randomize the fling ──
         const lateralSign = Math.random() > 0.5 ? 1 : -1;
@@ -158,62 +161,70 @@ export default function MatchupView({ matchup: initialMatchup, onJudged, onPhase
         const yeetEasing = Easing.out(Easing.quad);
         const flingY = direction === 'up' ? -YEET_TRANSLATE_Y : YEET_TRANSLATE_Y;
 
-        // ── Fire the animation ──
+        // ── Fire the animation (shared values — ghost or slot reads them) ──
         requestAnimationFrame(() => {
             yeetTranslateY.value = withTiming(flingY, { duration: YEET_DURATION, easing: yeetEasing });
             yeetTranslateX.value = withTiming(lateralAmount * lateralSign, { duration: YEET_DURATION, easing: yeetEasing });
             yeetRotation.value = withTiming(rotationAmount * lateralSign, { duration: YEET_DURATION, easing: yeetEasing });
         });
 
-        // ── Fire backend — swap card THE INSTANT it responds ──
-        // Animation will be cut short (card disappears at ~200ms instead of
-        // flying off for 500ms). This is a test to measure loading speed.
-        (async () => {
-            if (__DEV__) console.log(`[YEET] backend started`);
-            await judgeMatchup(
-                currentMatchupIdRef.current,
-                keptCardId,
-                null,
-                currentStreak
-            ).catch(console.error);
-            if (__DEV__) console.log(`[YEET] judgeMatchup done +${Date.now() - t0}ms`);
+        // ── Fire judgment in background (NEVER await) ──
+        reportJudgment(
+            topCardIdRef.current,
+            bottomCardIdRef.current,
+            keptCardId,
+            null,
+            currentStreak,
+        );
 
-            await syncMatchups().catch(console.error);
-            if (__DEV__) console.log(`[YEET] syncMatchups done +${Date.now() - t0}ms`);
+        // ── Pop next challenger ──
+        const keptSenderId = direction === 'up' ? bottomSenderIdRef.current : topSenderIdRef.current;
+        const challenger = popChallenger([keptCardId], [keptSenderId]);
 
-            const nextMatchups = useStore.getState().cachedMatchups;
-            const ladderMatchup = nextMatchups.find(
-                m => m.card_a_id === keptCardId
-            );
+        if (challenger) {
+            // Ghost approach: mount an overlay with the dead card flying away,
+            // immediately swap the slot underneath to the new challenger.
+            const deadCard = deadSlot === 'top' ? topCardObjRef.current : bottomCardObjRef.current;
+            setGhost({ card: deadCard, slot: deadSlot });
 
-            // Reset transforms and swap immediately
-            yeetingSlotSV.value = YEET_NONE;
-            yeetTranslateY.value = 0;
-            yeetTranslateX.value = 0;
-            yeetRotation.value = 0;
-
-            if (ladderMatchup) {
-                if (__DEV__) console.log(`[YEET] swapping ${deadSlot} → ${ladderMatchup.card_b_id.slice(0, 8)} +${Date.now() - t0}ms`);
-
-                if (deadSlot === 'top') {
-                    setTopCard(ladderMatchup.card_b);
-                    topCardIdRef.current = ladderMatchup.card_b_id;
-                } else {
-                    setBottomCard(ladderMatchup.card_b);
-                    bottomCardIdRef.current = ladderMatchup.card_b_id;
-                }
-
-                currentMatchupIdRef.current = ladderMatchup.matchup_id;
-                hasJudgedRef.current = false;
-
-                if (onPhaseChange) onPhaseChange('READY');
+            // Swap the dead slot immediately — new card starts loading under the ghost
+            if (deadSlot === 'top') {
+                setTopCard(challenger);
+                topCardIdRef.current = challenger.id;
+                topSenderIdRef.current = challenger.sender_id;
+                topCardObjRef.current = challenger;
             } else {
-                if (__DEV__) console.log(`[YEET] no ladder matchup`);
-                onJudged();
+                setBottomCard(challenger);
+                bottomCardIdRef.current = challenger.id;
+                bottomSenderIdRef.current = challenger.sender_id;
+                bottomCardObjRef.current = challenger;
             }
-        })();
 
-    }, [judgeMatchup, onJudged, onPhaseChange, syncMatchups]);
+            // Prefetch in background (likely already cached from pool fetch)
+            prefetchVideo(challenger.video_url).catch(() => {});
+
+            // Clear ghost after animation completes
+            setTimeout(() => {
+                setGhost(null);
+                yeetTranslateY.value = 0;
+                yeetTranslateX.value = 0;
+                yeetRotation.value = 0;
+                hasJudgedRef.current = false;
+                if (onPhaseChange) onPhaseChange('READY');
+            }, YEET_DURATION + 50);
+        } else {
+            // Pool empty: animate the slot directly (no ghost, old behavior)
+            yeetingSlotSV.value = deadSlot === 'top' ? YEET_TOP : YEET_BOTTOM;
+            setTimeout(() => {
+                yeetingSlotSV.value = YEET_NONE;
+                yeetTranslateY.value = 0;
+                yeetTranslateX.value = 0;
+                yeetRotation.value = 0;
+                onJudged();
+            }, SWAP_DELAY_MS);
+        }
+
+    }, [reportJudgment, popChallenger, onJudged, onPhaseChange]);
 
     // --- Gesture ---
     const panGesture = Gesture.Pan()
@@ -277,6 +288,16 @@ export default function MatchupView({ matchup: initialMatchup, onJudged, onPhase
         return {};
     });
 
+    // Ghost animated style — always applies transforms (ghost only exists during animation)
+    const ghostAnimatedStyle = useAnimatedStyle(() => ({
+        transform: [
+            { translateY: yeetTranslateY.value },
+            { translateX: yeetTranslateX.value },
+            { rotate: `${yeetRotation.value}deg` },
+        ],
+    }));
+    const slotHeight = (containerHeight - 2) / 2;
+
     // --- Render ---
     return (
         <View
@@ -315,6 +336,28 @@ export default function MatchupView({ matchup: initialMatchup, onJudged, onPhase
 
                     {/* Seam glow */}
                     <SeamGlow x={displayX} y={displayY} opacity={glowOpacity} />
+
+                    {/* Ghost overlay — yeeted card flies away on top while new card plays underneath */}
+                    {ghost && (
+                        <Reanimated.View
+                            key={`ghost-${ghost.card.id}`}
+                            style={[
+                                {
+                                    position: 'absolute',
+                                    top: ghost.slot === 'top' ? 0 : slotHeight + 2,
+                                    left: 0,
+                                    right: 0,
+                                    height: slotHeight,
+                                    zIndex: 10,
+                                    overflow: 'visible' as const,
+                                },
+                                ghostAnimatedStyle,
+                            ]}
+                            pointerEvents="none"
+                        >
+                            <CardFace card={ghost.card} isPlaying={true} slot="ghost" />
+                        </Reanimated.View>
+                    )}
 
                 </Reanimated.View>
             </GestureDetector>

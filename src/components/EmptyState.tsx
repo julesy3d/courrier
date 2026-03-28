@@ -2,11 +2,7 @@ import React from 'react';
 import { View, StyleSheet, Text } from 'react-native';
 import { Theme } from '../theme';
 
-interface EmptyStateProps {
-    activeMatchupCount: number;
-}
-
-export default function EmptyState({ activeMatchupCount }: EmptyStateProps) {
+export default function EmptyState() {
     return (
         <View style={styles.container}>
             <View style={styles.half} />
@@ -15,9 +11,7 @@ export default function EmptyState({ activeMatchupCount }: EmptyStateProps) {
 
             <View style={styles.textOverlay}>
                 <Text style={styles.text}>
-                    {activeMatchupCount > 0
-                        ? `Your cards are in ${activeMatchupCount} active matchups`
-                        : 'No active matchups yet.\nCreate a card!'}
+                    No videos available right now.{'\n'}Create a card!
                 </Text>
             </View>
         </View>

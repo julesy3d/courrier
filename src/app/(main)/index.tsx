@@ -1,50 +1,51 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, AppState, ActivityIndicator, Platform } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, AppState, ActivityIndicator } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { useStore } from '../../lib/store';
-import { supabase } from '../../lib/supabase';
+import { Card, useStore } from '../../lib/store';
 import MatchupView from '../../components/MatchupView';
 import EmptyState from '../../components/EmptyState';
 import VideoCapture from '../../components/VideoCapture';
 import GlassSurface from '../../components/GlassSurface';
-import { cleanVideoCache } from '../../lib/videoCache';
+import { cleanVideoCache, prefetchVideo } from '../../lib/videoCache';
 import { Theme } from '../../theme';
 
 export default function MainScreen() {
-    const { currentUser, cachedMatchups, syncMatchups, heartbeat } = useStore();
+    const { currentUser, cardPool, fetchCardPool, heartbeat, returnUnusedCards } = useStore();
     const router = useRouter();
     const insets = useSafeAreaInsets();
 
     const [isLoading, setIsLoading] = useState(true);
     const [showCamera, setShowCamera] = useState(false);
-    const [activeMatchupCount, setActiveMatchupCount] = useState(0);
+    const [initialCards, setInitialCards] = useState<{ a: Card; b: Card } | null>(null);
 
-    const fetchActiveCount = async () => {
+    const initPool = async () => {
         try {
-            const { count } = await supabase
-                .from('matchups')
-                .select('id', { count: 'exact', head: true })
-                .is('judged_at', null);
-            setActiveMatchupCount(count || 0);
-        } catch (e) {
-            console.error('Error fetching count', e);
-        }
-    };
-
-    const syncAll = async () => {
-        try {
-            // Clear stale cached matchups — always start fresh from the server
-            useStore.setState({ cachedMatchups: [] });
             await heartbeat();
-            await syncMatchups();
-            await fetchActiveCount();
 
-            // Clean video files not needed by current matchups
-            const matchups = useStore.getState().cachedMatchups;
-            const activeUrls = matchups.flatMap(m => [m.card_a.video_url, m.card_b.video_url]);
+            // Return fuel for stale cards from a previous session, then start fresh
+            const stalePool = useStore.getState().cardPool;
+            if (stalePool.length > 0) {
+                returnUnusedCards(stalePool.map(c => c.id));
+                useStore.setState({ cardPool: [], poolExcludeIds: [] });
+            }
+
+            await fetchCardPool(10);
+
+            // Wait for the first 2 videos to be on disk before displaying.
+            // The rest download in the background via the concurrency queue.
+            const pool = useStore.getState().cardPool;
+            if (pool.length >= 2) {
+                await Promise.all([
+                    prefetchVideo(pool[0].video_url),
+                    prefetchVideo(pool[1].video_url),
+                ]);
+            }
+
+            // Clean video files not needed by current pool
+            const activeUrls = pool.map(c => c.video_url);
             cleanVideoCache(activeUrls);
         } catch (e) {
             console.error(e);
@@ -53,19 +54,58 @@ export default function MainScreen() {
         }
     };
 
+    // Pop first two cards for display once pool is ready
     useEffect(() => {
-        syncAll();
+        const pool = useStore.getState().cardPool;
+        if (!isLoading && pool.length >= 2 && !initialCards) {
+            const a = pool[0];
+            const b = pool[1];
+            useStore.setState({ cardPool: pool.slice(2) });
+            setInitialCards({ a, b });
+        }
+    }, [isLoading, cardPool.length]);
+
+    useEffect(() => {
+        initPool();
         const sub = AppState.addEventListener('change', (state) => {
-            if (state === 'active') syncAll();
+            if (state === 'active') {
+                // On resume: refill pool if low, don't reset current matchup
+                const pool = useStore.getState().cardPool;
+                if (pool.length < 5) {
+                    fetchCardPool(10).catch(console.error);
+                }
+            }
         });
         return () => sub.remove();
     }, []);
 
     const handleJudged = () => {
-        fetchActiveCount();
+        // Pool ran out during play — try to refill and restart
+        setInitialCards(null);
+        setIsLoading(true);
+        fetchCardPool(10).then(async () => {
+            const pool = useStore.getState().cardPool;
+            if (pool.length >= 2) {
+                // Wait for first 2 videos before displaying
+                await Promise.all([
+                    prefetchVideo(pool[0].video_url),
+                    prefetchVideo(pool[1].video_url),
+                ]);
+                setInitialCards({ a: pool[0], b: pool[1] });
+                useStore.setState({ cardPool: pool.slice(2) });
+            }
+            setIsLoading(false);
+        }).catch(() => setIsLoading(false));
     };
 
-    const currentMatchup = cachedMatchups[0];
+    const handleVideoCreated = () => {
+        setShowCamera(false);
+        // Refill pool in background after creating a card
+        const pool = useStore.getState().cardPool;
+        if (pool.length < 5) {
+            fetchCardPool(10).catch(console.error);
+        }
+    };
 
     return (
         <View style={styles.container}>
@@ -97,17 +137,18 @@ export default function MainScreen() {
 
             {/* Content area — full screen */}
             <View style={styles.content}>
-                {isLoading && cachedMatchups.length === 0 ? (
+                {isLoading && !initialCards ? (
                     <View style={styles.center}>
                         <ActivityIndicator size="large" color={Theme.colors.textSecondary} />
                     </View>
-                ) : currentMatchup ? (
+                ) : initialCards ? (
                     <MatchupView
-                        matchup={currentMatchup}
+                        initialCardA={initialCards.a}
+                        initialCardB={initialCards.b}
                         onJudged={handleJudged}
                     />
                 ) : (
-                    <EmptyState activeMatchupCount={activeMatchupCount} />
+                    <EmptyState />
                 )}
             </View>
 
@@ -131,10 +172,7 @@ export default function MainScreen() {
             {showCamera && (
                 <View style={StyleSheet.absoluteFill}>
                     <VideoCapture
-                        onComplete={() => {
-                            setShowCamera(false);
-                            syncAll();
-                        }}
+                        onComplete={handleVideoCreated}
                         onClose={() => {
                             setShowCamera(false);
                         }}

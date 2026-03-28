@@ -3,7 +3,7 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { registerForPushNotifications } from './notifications';
 import { supabase } from './supabase';
-import { prefetchMatchupVideos } from './videoCache';
+import { prefetchCardVideos, prefetchVideo } from './videoCache';
 
 // ═══════════════════════════════════════════════
 // TYPES
@@ -48,19 +48,11 @@ export const EMOJI_DISPLAY: Record<EmojiType, string> = {
 export type Card = {
     id: string;
     video_url: string;
+    sender_id: string;
     creator_username: string;
     emoji_tallies: EmojiTallies;
     total_wins: number;
     comment_count: number;
-};
-
-export type Matchup = {
-    matchup_id: string;
-    card_a_id: string;
-    card_b_id: string;
-    card_a: Card;
-    card_b: Card;
-    created_at: string;
 };
 
 export type Comment = {
@@ -87,7 +79,7 @@ export type LogEntry = {
 // ═══════════════════════════════════════════════
 
 interface CardsStore {
-    // --- Auth (keep all existing auth actions unchanged) ---
+    // --- Auth ---
     currentUser: AppUser | null;
     isLoading: boolean;
     signInAnonymously: () => Promise<void>;
@@ -96,33 +88,46 @@ interface CardsStore {
     loadCurrentUser: (authId: string) => Promise<void>;
     updateLanguage: (lang: 'en' | 'fr') => Promise<void>;
 
-    // --- Locale (unchanged) ---
+    // --- Locale ---
     localeOverride: 'en' | 'fr' | null;
     setLocaleOverride: (lang: 'en' | 'fr' | null) => void;
 
-    // --- Matchups (replaces Deliveries) ---
-    cachedMatchups: Matchup[];
-    isSyncing: boolean;
-    syncMatchups: () => Promise<Matchup[]>;
+    // --- Card Pool ---
+    cardPool: Card[];
+    poolExcludeIds: string[];
+    isPoolFetching: boolean;
+    fetchCardPool: (count?: number) => Promise<Card[]>;
 
-    // --- Judgment (replaces repost/dismiss) ---
-    judgeMatchup: (matchupId: string, keptCardId: string, emoji?: EmojiType | null, streak?: number) => Promise<void>;
+    // --- Judgment (fire-and-forget) ---
+    reportJudgment: (
+        cardAId: string,
+        cardBId: string,
+        keptCardId: string,
+        emoji: EmojiType | null,
+        streak?: number,
+    ) => void;
+
+    // --- Pool consumption ---
+    popChallenger: (currentCardIds: string[], excludeSenderIds?: string[]) => Card | null;
+
+    // --- Fuel return (fire-and-forget) ---
+    returnUnusedCards: (cardIds: string[]) => void;
 
     // --- Creation ---
     createCard: (videoUrl: string) => Promise<string>;
 
-    // --- Comments (unchanged) ---
+    // --- Comments ---
     fetchComments: (postId: string) => Promise<Comment[]>;
     addComment: (postId: string, body: string) => Promise<Comment>;
 
-    // --- Post log (unchanged) ---
+    // --- Post log ---
     fetchPostLog: (postId: string) => Promise<LogEntry[]>;
 
     // --- Outbox (user's created cards) ---
     cachedOutbox: { id: string; video_url: string; emoji_tallies: EmojiTallies; pending_views: number; total_wins: number; created_at: string }[];
     fetchOutbox: () => Promise<void>;
 
-    // --- Heartbeat (unchanged) ---
+    // --- Heartbeat ---
     heartbeat: () => Promise<void>;
 }
 
@@ -137,8 +142,9 @@ export const useStore = create<CardsStore>()(
             currentUser: null,
             isLoading: true,
             localeOverride: null,
-            cachedMatchups: [],
-            isSyncing: false,
+            cardPool: [],
+            poolExcludeIds: [],
+            isPoolFetching: false,
             cachedOutbox: [],
 
             // --- Auth (unchanged) ---
@@ -219,60 +225,108 @@ export const useStore = create<CardsStore>()(
             // --- Locale ---
             setLocaleOverride: (lang) => set({ localeOverride: lang }),
 
-            // --- Matchups ---
-            syncMatchups: async () => {
-                if (get().isSyncing) return [];
-                set({ isSyncing: true });
+            // --- Card Pool ---
+            fetchCardPool: async (count = 10) => {
+                if (get().isPoolFetching) return [];
+                set({ isPoolFetching: true });
                 try {
-                    const { cachedMatchups } = get();
-                    // High-water mark: get matchups created after the most recent cached one
-                    const lastCreatedAt = cachedMatchups.length > 0
-                        ? cachedMatchups[cachedMatchups.length - 1].created_at
-                        : null;
-
-                    const { data, error } = await supabase.rpc('sync_matchups', {
-                        p_after: lastCreatedAt,
+                    const { poolExcludeIds } = get();
+                    console.warn(`[POOL] fetching ${count} cards, excluding ${poolExcludeIds.length} ids`);
+                    const { data, error } = await supabase.rpc('fetch_card_pool', {
+                        p_count: count,
+                        p_exclude_ids: poolExcludeIds,
                     });
                     if (error) throw error;
 
-                    const newMatchups = (data || []) as Matchup[];
-                    const existingIds = new Set(cachedMatchups.map(m => m.matchup_id));
-                    const trulyNew = newMatchups.filter(m => !existingIds.has(m.matchup_id));
+                    const newCards = (data || []) as Card[];
+                    console.warn(`[POOL] got ${newCards.length} cards`);
+                    for (const c of newCards) {
+                        console.warn(`[POOL]   ${c.id.slice(0, 8)} url=${c.video_url?.slice(0, 60)}`);
+                    }
+                    const newIds = newCards.map(c => c.id);
 
-                    const combined = [...cachedMatchups, ...trulyNew];
-                    set({ cachedMatchups: combined });
+                    set({
+                        cardPool: [...get().cardPool, ...newCards],
+                        poolExcludeIds: [...poolExcludeIds, ...newIds],
+                    });
 
-                    // Prefetch videos for new matchups in the background
-                    if (trulyNew.length > 0) {
-                        prefetchMatchupVideos(trulyNew);
+                    // Prefetch videos in background
+                    if (newCards.length > 0) {
+                        prefetchCardVideos(newCards);
                     }
 
-                    return trulyNew;
+                    return newCards;
                 } catch (e) {
-                    console.error('Error syncing matchups', e);
+                    console.error('Error fetching card pool', e);
                     return [];
                 } finally {
-                    set({ isSyncing: false });
+                    set({ isPoolFetching: false });
                 }
             },
 
-            judgeMatchup: async (matchupId, keptCardId, emoji, streak = 1) => {
-                // Optimistic: remove from cache IMMEDIATELY so the next render picks up the next matchup
-                set({
-                    cachedMatchups: get().cachedMatchups.filter(m => m.matchup_id !== matchupId),
-                });
-
-                const { error } = await supabase.rpc('judge_matchup', {
-                    p_matchup_id: matchupId,
+            // --- Judgment (fire-and-forget, never blocks UI) ---
+            reportJudgment: (cardAId, cardBId, keptCardId, emoji, streak = 1) => {
+                supabase.rpc('report_judgment', {
+                    p_card_a_id: cardAId,
+                    p_card_b_id: cardBId,
                     p_kept_card_id: keptCardId,
                     p_emoji: emoji ?? null,
                     p_streak: streak,
+                }).then(({ error }) => {
+                    if (error) console.error('report_judgment RPC error:', error);
                 });
-                if (error) {
-                    console.error('judge_matchup RPC error:', error);
-                    // Don't throw — the matchup is already removed from cache.
-                    // The judgment will be lost but the UX won't break.
+            },
+
+            // --- Pop next challenger from pool ---
+            popChallenger: (currentCardIds: string[], excludeSenderIds: string[] = []) => {
+                const { cardPool } = get();
+                console.warn(`[POOL] popChallenger called, pool size=${cardPool.length}, alive=${currentCardIds}`);
+
+                const senderBlock = new Set(excludeSenderIds);
+
+                // Find first card not on screen and not by same creator
+                let idx = cardPool.findIndex(c =>
+                    !currentCardIds.includes(c.id) &&
+                    !senderBlock.has(c.sender_id)
+                );
+
+                // Fallback: ignore same-creator check, just find any card not on screen
+                if (idx === -1) {
+                    idx = cardPool.findIndex(c => !currentCardIds.includes(c.id));
                 }
+
+                if (idx === -1) {
+                    console.warn(`[POOL] popChallenger: no card found, pool empty`);
+                    return null;
+                }
+
+                const card = cardPool[idx];
+                console.warn(`[POOL] popChallenger: returning ${card.id.slice(0, 8)} url=${card.video_url?.slice(0, 60)}`);
+                const remaining = cardPool.filter((_, i) => i !== idx);
+                set({ cardPool: remaining });
+
+                // Pre-warm the NEXT card in pool so fast swipers never hit cold cache
+                if (remaining.length > 0) {
+                    prefetchVideo(remaining[0].video_url).catch(() => {});
+                }
+
+                // Trigger background refill if pool is getting low
+                if (remaining.length < 5) {
+                    get().fetchCardPool().catch(console.error);
+                }
+
+                return card;
+            },
+
+            // --- Return fuel for unplayed cards (fire-and-forget) ---
+            returnUnusedCards: (cardIds: string[]) => {
+                if (cardIds.length === 0) return;
+                console.warn(`[POOL] returning fuel for ${cardIds.length} unplayed cards`);
+                supabase.rpc('return_unused_cards', {
+                    p_card_ids: cardIds,
+                }).then(({ error }) => {
+                    if (error) console.error('return_unused_cards RPC error:', error);
+                });
             },
 
             createCard: async (videoUrl) => {
@@ -339,7 +393,7 @@ export const useStore = create<CardsStore>()(
                     .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
             },
 
-            // --- Comments (not persisted — fetched fresh) ---
+            // --- Comments ---
             fetchComments: async (postId: string) => {
                 const { data, error } = await supabase
                     .from('comments')
@@ -386,7 +440,8 @@ export const useStore = create<CardsStore>()(
             name: 'cards-storage',
             storage: createJSONStorage(() => AsyncStorage),
             partialize: (state) => ({
-                cachedMatchups: state.cachedMatchups,
+                cardPool: state.cardPool,
+                poolExcludeIds: state.poolExcludeIds,
                 cachedOutbox: state.cachedOutbox,
             }),
         }
