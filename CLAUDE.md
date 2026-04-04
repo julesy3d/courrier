@@ -26,7 +26,7 @@ These are the source of truth. If code contradicts the docs, the docs win. If yo
 
 - Matchup pairing is fully client-side. Server is a card vending machine + scoreboard.
 - `reportJudgment` is fire-and-forget. Zero RPCs on the gameplay critical path.
-- Images displayed via `expo-image` with built-in disk caching (no manual cache system).
+- Images prefetched via `Image.prefetch()` — same proactive pipeline as old video cache. First 2 awaited before display, rest in background.
 - Stale pool cards return fuel to server on cold start via `return_unused_cards`.
 - Ghost overlay system: dead card flies away on top while new card mounts underneath.
 - Photo capture: tap-to-shoot, front camera default with flip toggle.

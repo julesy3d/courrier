@@ -56,14 +56,20 @@
 
 ---
 
-## Image Display
+## Image Display & Prefetch
 
-Images are rendered via `expo-image`'s `Image` component. It provides:
-- Built-in disk caching (no manual cache system needed)
-- `transition={200}` for smooth fade-in on load
-- `contentFit="cover"` for edge-to-edge display in each slot
+Images are rendered via `expo-image`'s `Image` component with `contentFit="cover"`.
 
-No prefetch queue, no manual cache cleanup. `expo-image` handles everything internally.
+### Prefetch Pipeline
+
+`expo-image`'s built-in cache only stores images *after* first display. To ensure instant card swaps, we proactively prefetch using `Image.prefetch(url)`:
+
+1. **`fetchCardPool()`** — after appending new cards to the pool, fires `Image.prefetch()` for every new card (fire-and-forget, all in parallel)
+2. **Initial display** — `initPool()` explicitly awaits `Image.prefetch()` for the first 2 cards before setting `isLoading = false`. Spinner stays until both images are cached.
+3. **`popChallenger()`** — pre-warms the *next* card in the remaining pool (`Image.prefetch(remaining[0].video_url)`)
+4. **`handleJudged()`** — when pool empties and refills, awaits first 2 images before restarting
+
+This is the same architecture as the old video prefetch system, using `Image.prefetch()` instead of the custom `videoCache.ts` download queue.
 
 ---
 
