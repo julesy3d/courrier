@@ -16,7 +16,6 @@ export default function CardFace({ card, style }: CardFaceProps) {
                 source={{ uri: card.video_url }}
                 style={StyleSheet.absoluteFill}
                 contentFit="cover"
-                transition={200}
             />
         </View>
     );

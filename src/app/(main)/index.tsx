@@ -4,6 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import { Image } from 'expo-image';
 import { Card, useStore } from '../../lib/store';
 import MatchupView from '../../components/MatchupView';
 import EmptyState from '../../components/EmptyState';
@@ -32,6 +33,16 @@ export default function MainScreen() {
             }
 
             await fetchCardPool(10);
+
+            // Wait for the first 2 images to be cached before displaying.
+            // The rest are prefetched in background by fetchCardPool.
+            const pool = useStore.getState().cardPool;
+            if (pool.length >= 2) {
+                await Promise.all([
+                    Image.prefetch(pool[0].video_url),
+                    Image.prefetch(pool[1].video_url),
+                ]);
+            }
         } catch (e) {
             console.error(e);
         } finally {
@@ -68,9 +79,13 @@ export default function MainScreen() {
         // Pool ran out during play — try to refill and restart
         setInitialCards(null);
         setIsLoading(true);
-        fetchCardPool(10).then(() => {
+        fetchCardPool(10).then(async () => {
             const pool = useStore.getState().cardPool;
             if (pool.length >= 2) {
+                await Promise.all([
+                    Image.prefetch(pool[0].video_url),
+                    Image.prefetch(pool[1].video_url),
+                ]);
                 setInitialCards({ a: pool[0], b: pool[1] });
                 useStore.setState({ cardPool: pool.slice(2) });
             }

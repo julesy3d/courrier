@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
+import { Image } from 'expo-image';
 import { registerForPushNotifications } from './notifications';
 import { supabase } from './supabase';
 
@@ -249,6 +250,13 @@ export const useStore = create<CardsStore>()(
                         poolExcludeIds: [...poolExcludeIds, ...newIds],
                     });
 
+                    // Prefetch images in background so they're on disk before display
+                    if (newCards.length > 0) {
+                        for (const c of newCards) {
+                            Image.prefetch(c.video_url).catch(() => {});
+                        }
+                    }
+
                     return newCards;
                 } catch (e) {
                     console.error('Error fetching card pool', e);
@@ -298,6 +306,11 @@ export const useStore = create<CardsStore>()(
                 console.warn(`[POOL] popChallenger: returning ${card.id.slice(0, 8)} url=${card.video_url?.slice(0, 60)}`);
                 const remaining = cardPool.filter((_, i) => i !== idx);
                 set({ cardPool: remaining });
+
+                // Pre-warm the NEXT card in pool so fast swipers never hit cold cache
+                if (remaining.length > 0) {
+                    Image.prefetch(remaining[0].video_url).catch(() => {});
+                }
 
                 // Trigger background refill if pool is getting low
                 if (remaining.length < 5) {
