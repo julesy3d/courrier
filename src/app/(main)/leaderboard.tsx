@@ -12,9 +12,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useVideoPlayer, VideoView } from 'expo-video';
+import { Image } from 'expo-image';
 import { supabase } from '../../lib/supabase';
-import { getVideoUri } from '../../lib/videoCache';
 import { Theme } from '../../theme';
 
 type LeaderboardEntry = {
@@ -26,23 +25,14 @@ type LeaderboardEntry = {
     rank: number;
 };
 
-// ─── Looping mini-player for top 5 ───
-function MiniPlayer({ videoUrl, size }: { videoUrl: string; size: number }) {
-    const uri = getVideoUri(videoUrl);
-    const player = useVideoPlayer(uri, (p) => {
-        p.loop = true;
-        p.volume = 0;
-        p.play();
-    });
-
+// ─── Thumbnail for top 5 ───
+function MiniPreview({ imageUrl, size }: { imageUrl: string; size: number }) {
     return (
         <View style={[miniStyles.container, { width: size, height: size }]}>
-            <VideoView
-                player={player}
+            <Image
+                source={{ uri: imageUrl }}
                 style={StyleSheet.absoluteFill}
                 contentFit="cover"
-                nativeControls={false}
-                allowsVideoFrameAnalysis={false}
             />
         </View>
     );
@@ -57,17 +47,12 @@ const miniStyles = StyleSheet.create({
     },
 });
 
-// ─── Video preview modal (for entries below top 5) ───
-function VideoPreviewModal({ videoUrl, visible, onClose }: {
-    videoUrl: string | null;
+// ─── Image preview modal (for entries below top 5) ──���
+function ImagePreviewModal({ imageUrl, visible, onClose }: {
+    imageUrl: string | null;
     visible: boolean;
     onClose: () => void;
 }) {
-    const player = useVideoPlayer(visible ? videoUrl : null, (p) => {
-        p.loop = true;
-        p.play();
-    });
-
     return (
         <Modal
             visible={visible}
@@ -80,13 +65,12 @@ function VideoPreviewModal({ videoUrl, visible, onClose }: {
                 activeOpacity={1}
                 onPress={onClose}
             >
-                <View style={previewStyles.videoContainer}>
-                    {player && (
-                        <VideoView
-                            player={player}
-                            style={previewStyles.video}
+                <View style={previewStyles.imageContainer}>
+                    {imageUrl && (
+                        <Image
+                            source={{ uri: imageUrl }}
+                            style={previewStyles.image}
                             contentFit="cover"
-                            nativeControls={false}
                         />
                     )}
                 </View>
@@ -102,13 +86,13 @@ const previewStyles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
     },
-    videoContainer: {
+    imageContainer: {
         width: '75%',
         aspectRatio: 9 / 16,
         borderRadius: 12,
         overflow: 'hidden',
     },
-    video: {
+    image: {
         width: '100%',
         height: '100%',
     },
@@ -154,10 +138,9 @@ export default function LeaderboardScreen() {
         const barFraction = maxWins > 0 ? item.total_wins / maxWins : 0;
         const barWidth = `${Math.max(barFraction * 100, 8)}%` as const;
 
-        // Top 5 get progressively smaller video + bar, rest are compact text rows
         const barHeight = isFirst ? 36 : isSecond ? 28 : isThird ? 24 : isTop5 ? 18 : 10;
         const fontSize = isFirst ? 15 : isSecond ? 14 : isThird ? 13 : isTop5 ? 12 : 11;
-        const videoSize = isFirst ? 52 : isSecond ? 44 : isThird ? 38 : isTop5 ? 32 : 0;
+        const imageSize = isFirst ? 52 : isSecond ? 44 : isThird ? 38 : isTop5 ? 32 : 0;
 
         const barColor = isFirst
             ? Theme.colors.accent
@@ -184,8 +167,7 @@ export default function LeaderboardScreen() {
                     {item.rank}
                 </Text>
 
-                {/* Top 5: looping mini video. Rest: no video, tap row for preview */}
-                {isTop5 && <MiniPlayer videoUrl={item.video_url} size={videoSize} />}
+                {isTop5 && <MiniPreview imageUrl={item.video_url} size={imageSize} />}
 
                 <View style={styles.barContainer}>
                     <View
@@ -252,9 +234,8 @@ export default function LeaderboardScreen() {
                 />
             )}
 
-            {/* Video preview modal for entries below top 5 */}
-            <VideoPreviewModal
-                videoUrl={previewUrl}
+            <ImagePreviewModal
+                imageUrl={previewUrl}
                 visible={previewUrl !== null}
                 onClose={() => setPreviewUrl(null)}
             />

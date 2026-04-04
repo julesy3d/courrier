@@ -1,22 +1,17 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { View, StyleSheet, Dimensions } from 'react-native';
 import Reanimated, {
     SharedValue,
     useSharedValue,
     useAnimatedStyle,
     withTiming,
-    withRepeat,
     Easing,
     runOnJS,
 } from 'react-native-reanimated';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
-import { useAudioPlayer } from 'expo-audio';
 import { Card, useStore } from '../lib/store';
 import CardFace from './CardFace';
-import { prefetchVideo } from '../lib/videoCache';
-import { YEET_SOUND } from '../lib/sounds';
 import { Theme } from '../theme';
 
 // Yeet slot encoding for shared value (avoids React state re-renders)
@@ -73,86 +68,6 @@ const glowStyles = StyleSheet.create({
     },
 });
 
-
-// ─── Audio glow border ───
-// Gradient border visible only on the seam half, fading toward the outer edge.
-// Gentle pulse animation for life.
-const BORDER_W = 2;
-const GLOW_COLOR = Theme.colors.audioBorder;
-const GLOW_TRANSPARENT = 'rgba(255,255,255,0)';
-
-function AudioGlow({ position, active }: { position: 'top' | 'bottom'; active: boolean }) {
-    const opacity = useSharedValue(0);
-
-    useEffect(() => {
-        if (active) {
-            // Fade in, then pulse gently
-            opacity.value = withTiming(1, { duration: 200 }, () => {
-                opacity.value = withRepeat(
-                    withTiming(0.5, { duration: 1800, easing: Easing.inOut(Easing.ease) }),
-                    -1,
-                    true,
-                );
-            });
-        } else {
-            opacity.value = withTiming(0, { duration: 200 });
-        }
-    }, [active]);
-
-    const animStyle = useAnimatedStyle(() => ({
-        opacity: opacity.value,
-    }));
-
-    // Top slot: seam is at bottom → gradient fades upward, solid edge at bottom
-    // Bottom slot: seam is at top → gradient fades downward, solid edge at top
-    const isTop = position === 'top';
-    const sideColors: [string, string] = isTop
-        ? [GLOW_TRANSPARENT, GLOW_COLOR]   // transparent at top → white at bottom
-        : [GLOW_COLOR, GLOW_TRANSPARENT];  // white at top → transparent at bottom
-
-    return (
-        <Reanimated.View style={[StyleSheet.absoluteFill, animStyle]} pointerEvents="none">
-            {/* Seam-side horizontal edge */}
-            <View
-                style={[
-                    audioGlowStyles.seamEdge,
-                    isTop ? { bottom: 0 } : { top: 0 },
-                ]}
-            />
-            {/* Left vertical edge — gradient fade */}
-            <LinearGradient
-                colors={sideColors}
-                style={[audioGlowStyles.sideEdge, { left: 0 }]}
-            />
-            {/* Right vertical edge — gradient fade */}
-            <LinearGradient
-                colors={sideColors}
-                style={[audioGlowStyles.sideEdge, { right: 0 }]}
-            />
-        </Reanimated.View>
-    );
-}
-
-const audioGlowStyles = StyleSheet.create({
-    seamEdge: {
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        height: BORDER_W,
-        backgroundColor: GLOW_COLOR,
-        shadowColor: GLOW_COLOR,
-        shadowOffset: { width: 0, height: 0 },
-        shadowOpacity: 0.8,
-        shadowRadius: 8,
-    },
-    sideEdge: {
-        position: 'absolute',
-        top: 0,
-        bottom: 0,
-        width: BORDER_W,
-    },
-});
-
 interface MatchupViewProps {
     initialCardA: Card;
     initialCardB: Card;
@@ -162,7 +77,6 @@ interface MatchupViewProps {
 
 export default function MatchupView({ initialCardA, initialCardB, onJudged, onPhaseChange }: MatchupViewProps) {
     const { reportJudgment, popChallenger } = useStore();
-    const yeetPlayer = useAudioPlayer(YEET_SOUND);
     const hasJudgedRef = useRef(false);
     const streakRef = useRef(0);
     const streakCardRef = useRef<string | null>(null);
@@ -186,23 +100,10 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
     // Ghost overlay: the yeeted card flies away on top while the new challenger appears underneath
     const [ghost, setGhost] = useState<{ card: Card; slot: 'top' | 'bottom' } | null>(null);
 
-    // ═══════════════════════════════════════════════════════════════
-    // AUDIO ALTERNATION — one card has the mic at a time
-    // ═══════════════════════════════════════════════════════════════
-    const initialAudioSlot = Math.random() > 0.5 ? 'top' : 'bottom' as const;
-    const [audioSlot, setAudioSlot] = useState<'top' | 'bottom'>(initialAudioSlot);
-
-    const setAudioSlotBoth = useCallback((slot: 'top' | 'bottom') => {
-        setAudioSlot(slot);
-        if (__DEV__) console.log(`[AUDIO] mic → ${slot}`);
-    }, []);
-
     // Track which slot is being yeeted as a shared value (NOT React state).
-    // Using React state here caused re-renders that triggered native layout
-    // invalidation on the surviving slot's AVPlayerLayer, freezing the video.
     const yeetingSlotSV = useSharedValue(YEET_NONE);
 
-    // --- Yeet animation values (shared between both slots, only one yeeted at a time) ---
+    // --- Yeet animation values ---
     const yeetTranslateY = useSharedValue(0);
     const yeetTranslateX = useSharedValue(0);
     const yeetRotation = useSharedValue(0);
@@ -222,9 +123,6 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
         hasJudgedRef.current = true;
 
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-        // DEBUG: yeet sound disabled to test if freeze is audio-related
-        // yeetPlayer.seekTo(0);
-        // setTimeout(() => yeetPlayer.play(), 50);
 
         const deadSlot: 'top' | 'bottom' = direction === 'up' ? 'top' : 'bottom';
         const keptCardId = direction === 'up' ? bottomCardIdRef.current : topCardIdRef.current;
@@ -253,7 +151,7 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
         const yeetEasing = Easing.out(Easing.quad);
         const flingY = direction === 'up' ? -YEET_TRANSLATE_Y : YEET_TRANSLATE_Y;
 
-        // ── Fire the animation (shared values — ghost or slot reads them) ──
+        // ── Fire the animation ──
         requestAnimationFrame(() => {
             yeetTranslateY.value = withTiming(flingY, { duration: YEET_DURATION, easing: yeetEasing });
             yeetTranslateX.value = withTiming(lateralAmount * lateralSign, { duration: YEET_DURATION, easing: yeetEasing });
@@ -274,8 +172,6 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
         const challenger = popChallenger([keptCardId], [keptSenderId]);
 
         if (challenger) {
-            // Ghost approach: mount an overlay with the dead card flying away,
-            // immediately swap the slot underneath to the new challenger.
             const deadCard = deadSlot === 'top' ? topCardObjRef.current : bottomCardObjRef.current;
             setGhost({ card: deadCard, slot: deadSlot });
 
@@ -292,17 +188,7 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
                 bottomCardObjRef.current = challenger;
             }
 
-            // Survivor keeps the mic — forces user to engage with both cards
-            const survivorSlot: 'top' | 'bottom' = deadSlot === 'top' ? 'bottom' : 'top';
-            setAudioSlotBoth(survivorSlot);
-
-            // Prefetch in background (likely already cached from pool fetch)
-            prefetchVideo(challenger.video_url).catch(() => {});
-
             // Clear ghost after animation completes.
-            // Do NOT reset shared values here — React takes a frame to unmount
-            // the ghost, and resetting transforms to 0 would flash it back to
-            // its original position for one frame. Values reset at next yeet start.
             setTimeout(() => {
                 setGhost(null);
                 hasJudgedRef.current = false;
@@ -320,7 +206,7 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
             }, SWAP_DELAY_MS);
         }
 
-    }, [reportJudgment, popChallenger, onJudged, onPhaseChange, setAudioSlotBoth]);
+    }, [reportJudgment, popChallenger, onJudged, onPhaseChange]);
 
     // --- Gesture ---
     const panGesture = Gesture.Pan()
@@ -356,8 +242,6 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
         });
 
     // --- Animated styles ---
-    // Only the yeeted slot gets transforms. The surviving slot returns {}
-    // and its native view is never touched by Reanimated during the animation.
     const topAnimatedStyle = useAnimatedStyle(() => {
         if (yeetingSlotSV.value === YEET_TOP) {
             return {
@@ -384,7 +268,7 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
         return {};
     });
 
-    // Ghost animated style — always applies transforms (ghost only exists during animation)
+    // Ghost animated style — always applies transforms
     const ghostAnimatedStyle = useAnimatedStyle(() => ({
         transform: [
             { translateY: yeetTranslateY.value },
@@ -408,13 +292,7 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
                         key={topCard.id}
                         style={[styles.videoHalf, topAnimatedStyle]}
                     >
-                        <CardFace
-                            card={topCard}
-                            isPlaying={true}
-                            muted={audioSlot !== 'top'}
-                            slot="top"
-                        />
-                        <AudioGlow position="top" active={audioSlot === 'top'} />
+                        <CardFace card={topCard} />
                     </Reanimated.View>
 
                     {/* Seam */}
@@ -425,19 +303,13 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
                         key={bottomCard.id}
                         style={[styles.videoHalf, bottomAnimatedStyle]}
                     >
-                        <CardFace
-                            card={bottomCard}
-                            isPlaying={true}
-                            muted={audioSlot !== 'bottom'}
-                            slot="bottom"
-                        />
-                        <AudioGlow position="bottom" active={audioSlot === 'bottom'} />
+                        <CardFace card={bottomCard} />
                     </Reanimated.View>
 
                     {/* Seam glow */}
                     <SeamGlow x={displayX} y={displayY} opacity={glowOpacity} />
 
-                    {/* Ghost overlay — yeeted card flies away on top while new card plays underneath */}
+                    {/* Ghost overlay — yeeted card flies away on top while new card appears underneath */}
                     {ghost && (
                         <Reanimated.View
                             key={`ghost-${ghost.card.id}`}
@@ -455,7 +327,7 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
                             ]}
                             pointerEvents="none"
                         >
-                            <CardFace card={ghost.card} isPlaying={true} muted={true} slot="ghost" />
+                            <CardFace card={ghost.card} />
                         </Reanimated.View>
                     )}
 

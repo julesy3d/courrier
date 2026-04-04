@@ -4,7 +4,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { useVideoPlayer, VideoView } from 'expo-video';
+import { Image } from 'expo-image';
 import { useStore } from '../../lib/store';
 import PostLogSheet from '../../components/PostLogSheet';
 import { Theme } from '../../theme';
@@ -12,11 +12,6 @@ import { Theme } from '../../theme';
 const { width } = Dimensions.get('window');
 
 function OutboxCard({ item, onPress }: { item: any; onPress: () => void }) {
-    const player = useVideoPlayer(item.video_url, p => {
-        p.loop = false;
-        p.pause();
-    });
-
     const isDead = item.pending_views === 0;
 
     return (
@@ -26,12 +21,10 @@ function OutboxCard({ item, onPress }: { item: any; onPress: () => void }) {
             style={[styles.card, isDead && { opacity: 0.4 }]}
         >
             <View style={styles.thumbnailContainer}>
-                <VideoView
+                <Image
+                    source={{ uri: item.video_url }}
                     style={StyleSheet.absoluteFill}
-                    player={player}
                     contentFit="cover"
-                    showsTimecodes={false}
-                    nativeControls={false}
                 />
 
                 {isDead && (

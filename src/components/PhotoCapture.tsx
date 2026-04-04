@@ -1,121 +1,37 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState } from 'react';
 import { View, StyleSheet, TouchableOpacity, Text, Dimensions, ActivityIndicator } from 'react-native';
-import { CameraView, useCameraPermissions } from 'expo-camera';
-import { useVideoPlayer, VideoView } from 'expo-video';
+import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
+import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Reanimated, { useSharedValue, useAnimatedStyle, withTiming, SharedValue } from 'react-native-reanimated';
-import { uploadCardVideo } from '../lib/imageUtils';
+import { uploadCardImage } from '../lib/imageUtils';
 import { useStore } from '../lib/store';
 import { supabase } from '../lib/supabase';
-import { useTranslation } from '../lib/i18n';
 import { Theme } from '../theme';
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
-const GUIDE_PADDING = 12; // horizontal padding from screen edge
+const GUIDE_PADDING = 12;
 const GUIDE_WIDTH = screenWidth - GUIDE_PADDING * 2;
-// Match the half-screen aspect ratio where cards are displayed:
 const GUIDE_HEIGHT = GUIDE_WIDTH * (screenHeight / 2) / screenWidth;
 
-interface VideoCaptureProps {
+interface PhotoCaptureProps {
     onComplete: () => void;
     onClose: () => void;
 }
 
-type Phase = 'idle' | 'recording' | 'preview' | 'uploading' | 'done' | 'error';
+type Phase = 'idle' | 'preview' | 'uploading' | 'done' | 'error';
 
-function CropGuideProgress({ progress }: { progress: SharedValue<number> }) {
-    // Top edge: progress 0–0.25 → width 0–100%
-    const topStyle = useAnimatedStyle(() => {
-        const p = Math.min(Math.max(progress.value / 0.25, 0), 1);
-        return { width: GUIDE_WIDTH * p };
-    });
-
-    // Right edge: progress 0.25–0.50 → height 0–100%
-    const rightStyle = useAnimatedStyle(() => {
-        const p = Math.min(Math.max((progress.value - 0.25) / 0.25, 0), 1);
-        return { height: GUIDE_HEIGHT * p };
-    });
-
-    // Bottom edge: progress 0.50–0.75 → width 0–100%, anchored right
-    const bottomStyle = useAnimatedStyle(() => {
-        const p = Math.min(Math.max((progress.value - 0.5) / 0.25, 0), 1);
-        return { width: GUIDE_WIDTH * p };
-    });
-
-    // Left edge: progress 0.75–1.00 → height 0–100%, anchored bottom
-    const leftStyle = useAnimatedStyle(() => {
-        const p = Math.min(Math.max((progress.value - 0.75) / 0.25, 0), 1);
-        return { height: GUIDE_HEIGHT * p };
-    });
-
-    return (
-        <View style={cropProgressStyles.container} pointerEvents="none">
-            {/* Top edge — anchored top-left, grows right */}
-            <Reanimated.View style={[cropProgressStyles.edge, {
-                top: 0, left: 0, height: 3,
-            }, topStyle]} />
-
-            {/* Right edge — anchored top-right, grows down */}
-            <Reanimated.View style={[cropProgressStyles.edge, {
-                top: 0, right: 0, width: 3,
-            }, rightStyle]} />
-
-            {/* Bottom edge — anchored bottom-right, grows left */}
-            <Reanimated.View style={[cropProgressStyles.edge, {
-                bottom: 0, right: 0, height: 3,
-            }, bottomStyle]} />
-
-            {/* Left edge — anchored bottom-left, grows up */}
-            <Reanimated.View style={[cropProgressStyles.edge, {
-                bottom: 0, left: 0, width: 3,
-            }, leftStyle]} />
-        </View>
-    );
-}
-
-const cropProgressStyles = StyleSheet.create({
-    container: {
-        position: 'absolute',
-        width: GUIDE_WIDTH,
-        height: GUIDE_HEIGHT,
-    },
-    edge: {
-        position: 'absolute',
-        backgroundColor: Theme.colors.danger,
-        borderRadius: 1.5,
-    },
-});
-
-export default function VideoCapture({ onComplete, onClose }: VideoCaptureProps) {
+export default function PhotoCapture({ onComplete, onClose }: PhotoCaptureProps) {
     const { currentUser, createCard } = useStore();
-    const { t } = useTranslation();
     const insets = useSafeAreaInsets();
     const [permission, requestPermission] = useCameraPermissions();
 
     const cameraRef = useRef<CameraView>(null);
     const [phase, setPhase] = useState<Phase>('idle');
     const [error, setError] = useState<string | null>(null);
-    const [videoUri, setVideoUri] = useState<string | null>(null);
-
-    const progress = useSharedValue(0);
-    const recordingTimeout = useRef<NodeJS.Timeout | null>(null);
-
-    const player = useVideoPlayer(videoUri, player => {
-        player.loop = true;
-        player.play();
-    });
-
-    useEffect(() => {
-        if (phase === 'preview' && videoUri) {
-            player.replace(videoUri);
-            player.loop = true;
-            player.play();
-        } else if (phase !== 'preview') {
-            player.pause();
-        }
-    }, [phase, videoUri]);
+    const [imageUri, setImageUri] = useState<string | null>(null);
+    const [facing, setFacing] = useState<CameraType>('front');
 
     if (!permission) return <View style={styles.container} />;
 
@@ -133,54 +49,31 @@ export default function VideoCapture({ onComplete, onClose }: VideoCaptureProps)
         );
     }
 
-    const startRecording = async () => {
+    const takePicture = async () => {
         if (phase !== 'idle' || !cameraRef.current) return;
 
         try {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-            setPhase('recording');
-
-            // Animate the crop guide progress
-            progress.value = withTiming(1, { duration: 5000 });
-
-            // Auto-stop after 5s
-            recordingTimeout.current = setTimeout(() => {
-                stopRecording();
-            }, 5000);
-
-            const result = await cameraRef.current.recordAsync({
-                maxDuration: 5,
-            });
-
+            const result = await cameraRef.current.takePictureAsync({ quality: 0.8 });
             if (result?.uri) {
-                setVideoUri(result.uri);
+                setImageUri(result.uri);
                 setPhase('preview');
-                progress.value = 0;
             }
         } catch (e) {
-            console.error('Recording failed', e);
-            setPhase('idle');
-            progress.value = 0;
-        }
-    };
-
-    const stopRecording = () => {
-        if (cameraRef.current && phase === 'recording') {
-            cameraRef.current.stopRecording();
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            console.error('Photo capture failed', e);
         }
     };
 
     const handleSend = async () => {
-        if (!videoUri) return;
+        if (!imageUri) return;
         setPhase('uploading');
 
         try {
             const { data: { session } } = await supabase.auth.getSession();
             if (!session) throw new Error('No active session');
 
-            const url = await uploadCardVideo(
-                videoUri,
+            const url = await uploadCardImage(
+                imageUri,
                 currentUser!.id,
                 session.access_token
             );
@@ -204,13 +97,13 @@ export default function VideoCapture({ onComplete, onClose }: VideoCaptureProps)
     return (
         <View style={styles.container}>
             {/* Camera View */}
-            {(phase === 'idle' || phase === 'recording') && (
+            {phase === 'idle' && (
                 <View style={StyleSheet.absoluteFill}>
                     <CameraView
                         ref={cameraRef}
                         style={StyleSheet.absoluteFill}
-                        facing="back"
-                        mode="video"
+                        facing={facing}
+                        mode="picture"
                     />
 
                     {/* Dark overlay with transparent crop-guide hole */}
@@ -219,14 +112,7 @@ export default function VideoCapture({ onComplete, onClose }: VideoCaptureProps)
                         <View style={styles.overlayMiddleRow}>
                             <View style={styles.overlaySide} />
                             <View style={styles.guideRect}>
-                                {/* Subtle white border when idle */}
-                                {phase === 'idle' && (
-                                    <View style={styles.guideBorderIdle} />
-                                )}
-                                {/* Red progress border when recording */}
-                                {phase === 'recording' && (
-                                    <CropGuideProgress progress={progress} />
-                                )}
+                                <View style={styles.guideBorderIdle} />
                             </View>
                             <View style={styles.overlaySide} />
                         </View>
@@ -236,22 +122,20 @@ export default function VideoCapture({ onComplete, onClose }: VideoCaptureProps)
             )}
 
             {/* Preview View */}
-            {phase === 'preview' && videoUri && (
+            {phase === 'preview' && imageUri && (
                 <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center' }]}>
                     <View style={styles.previewContainer}>
-                        <VideoView
-                            player={player}
+                        <Image
+                            source={{ uri: imageUri }}
                             style={StyleSheet.absoluteFill}
                             contentFit="cover"
-                            showsTimecodes={false}
-                            nativeControls={false}
                         />
                     </View>
 
                     <View style={styles.previewActions}>
                         <TouchableOpacity style={styles.actionBtn} onPress={() => {
                             setPhase('idle');
-                            setVideoUri(null);
+                            setImageUri(null);
                         }}>
                             <Ionicons name="close" size={24} color={Theme.colors.textPrimary} />
                             <Text style={styles.actionText}>Retake</Text>
@@ -294,27 +178,31 @@ export default function VideoCapture({ onComplete, onClose }: VideoCaptureProps)
                 </View>
             )}
 
-            {/* Controls (Idle / Recording) */}
-            {(phase === 'idle' || phase === 'recording') && (
+            {/* Controls (Idle) */}
+            {phase === 'idle' && (
                 <>
-                    {phase === 'idle' && (
-                        <TouchableOpacity
-                            style={[styles.closeCamera, { top: insets.top + 12 }]}
-                            onPress={onClose}
-                        >
-                            <Ionicons name="close" size={28} color={Theme.colors.textPrimary} />
-                        </TouchableOpacity>
-                    )}
+                    <TouchableOpacity
+                        style={[styles.closeCamera, { top: insets.top + 12 }]}
+                        onPress={onClose}
+                    >
+                        <Ionicons name="close" size={28} color={Theme.colors.textPrimary} />
+                    </TouchableOpacity>
+
+                    {/* Flip camera toggle */}
+                    <TouchableOpacity
+                        style={[styles.flipButton, { top: insets.top + 12 }]}
+                        onPress={() => setFacing(f => f === 'front' ? 'back' : 'front')}
+                    >
+                        <Ionicons name="camera-reverse-outline" size={24} color={Theme.colors.textPrimary} />
+                    </TouchableOpacity>
 
                     <View style={[styles.shutterHost, { bottom: insets.bottom + 40 }]}>
                         <TouchableOpacity
                             activeOpacity={0.9}
-                            onPressIn={startRecording}
+                            onPress={takePicture}
                             style={styles.shutterBtn}
                         >
-                            <Reanimated.View style={[
-                                phase === 'recording' ? styles.shutterInnerRecording : styles.shutterInner,
-                            ]} />
+                            <View style={styles.shutterInner} />
                         </TouchableOpacity>
                     </View>
                 </>
@@ -362,6 +250,17 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         zIndex: 10,
     },
+    flipButton: {
+        position: 'absolute',
+        right: 20,
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        backgroundColor: Theme.colors.buttonBackground,
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 10,
+    },
 
     // Crop overlay
     overlayHost: {
@@ -382,7 +281,6 @@ const styles = StyleSheet.create({
     guideRect: {
         width: GUIDE_WIDTH,
         height: GUIDE_HEIGHT,
-        // transparent hole — no backgroundColor
     },
     guideBorderIdle: {
         ...StyleSheet.absoluteFillObject,
@@ -419,12 +317,6 @@ const styles = StyleSheet.create({
         height: 64,
         borderRadius: 32,
         backgroundColor: Theme.colors.textPrimary,
-    },
-    shutterInnerRecording: {
-        width: 28,
-        height: 28,
-        borderRadius: 6,
-        backgroundColor: Theme.colors.danger,
     },
 
     // Preview

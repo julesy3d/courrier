@@ -7,9 +7,8 @@ import * as Haptics from 'expo-haptics';
 import { Card, useStore } from '../../lib/store';
 import MatchupView from '../../components/MatchupView';
 import EmptyState from '../../components/EmptyState';
-import VideoCapture from '../../components/VideoCapture';
+import PhotoCapture from '../../components/PhotoCapture';
 import GlassSurface from '../../components/GlassSurface';
-import { cleanVideoCache, prefetchVideo } from '../../lib/videoCache';
 import { Theme } from '../../theme';
 
 export default function MainScreen() {
@@ -33,20 +32,6 @@ export default function MainScreen() {
             }
 
             await fetchCardPool(10);
-
-            // Wait for the first 2 videos to be on disk before displaying.
-            // The rest download in the background via the concurrency queue.
-            const pool = useStore.getState().cardPool;
-            if (pool.length >= 2) {
-                await Promise.all([
-                    prefetchVideo(pool[0].video_url),
-                    prefetchVideo(pool[1].video_url),
-                ]);
-            }
-
-            // Clean video files not needed by current pool
-            const activeUrls = pool.map(c => c.video_url);
-            cleanVideoCache(activeUrls);
         } catch (e) {
             console.error(e);
         } finally {
@@ -83,14 +68,9 @@ export default function MainScreen() {
         // Pool ran out during play — try to refill and restart
         setInitialCards(null);
         setIsLoading(true);
-        fetchCardPool(10).then(async () => {
+        fetchCardPool(10).then(() => {
             const pool = useStore.getState().cardPool;
             if (pool.length >= 2) {
-                // Wait for first 2 videos before displaying
-                await Promise.all([
-                    prefetchVideo(pool[0].video_url),
-                    prefetchVideo(pool[1].video_url),
-                ]);
                 setInitialCards({ a: pool[0], b: pool[1] });
                 useStore.setState({ cardPool: pool.slice(2) });
             }
@@ -171,7 +151,7 @@ export default function MainScreen() {
             {/* Camera Overlay */}
             {showCamera && (
                 <View style={StyleSheet.absoluteFill}>
-                    <VideoCapture
+                    <PhotoCapture
                         onComplete={handleVideoCreated}
                         onClose={() => {
                             setShowCamera(false);

@@ -23,12 +23,7 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.julesbenveniste.Yeet",
-      "permissions": [
-        "android.permission.RECORD_AUDIO",
-        "android.permission.MODIFY_AUDIO_SETTINGS",
-        "android.permission.FOREGROUND_SERVICE",
-        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
-      ]
+      "permissions": []
     },
     "web": {
       "output": "static",
@@ -53,16 +48,14 @@
         }
       ],
       "expo-localization",
-      "expo-video",
       [
         "expo-camera",
         {
-          "cameraPermission": "Yeet uses the camera to record your videos.",
-          "microphonePermission": "Yeet uses the microphone to record audio with your videos.",
-          "recordAudioAndroid": true
+          "cameraPermission": "Yeet uses the camera to take photos.",
+          "recordAudioAndroid": false
         }
       ],
-      "expo-audio"
+      "expo-image"
     ],
     "experiments": {
       "typedRoutes": true,

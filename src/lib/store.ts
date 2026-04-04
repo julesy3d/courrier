@@ -3,7 +3,6 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { registerForPushNotifications } from './notifications';
 import { supabase } from './supabase';
-import { prefetchCardVideos, prefetchVideo } from './videoCache';
 
 // ═══════════════════════════════════════════════
 // TYPES
@@ -250,11 +249,6 @@ export const useStore = create<CardsStore>()(
                         poolExcludeIds: [...poolExcludeIds, ...newIds],
                     });
 
-                    // Prefetch videos in background
-                    if (newCards.length > 0) {
-                        prefetchCardVideos(newCards);
-                    }
-
                     return newCards;
                 } catch (e) {
                     console.error('Error fetching card pool', e);
@@ -304,11 +298,6 @@ export const useStore = create<CardsStore>()(
                 console.warn(`[POOL] popChallenger: returning ${card.id.slice(0, 8)} url=${card.video_url?.slice(0, 60)}`);
                 const remaining = cardPool.filter((_, i) => i !== idx);
                 set({ cardPool: remaining });
-
-                // Pre-warm the NEXT card in pool so fast swipers never hit cold cache
-                if (remaining.length > 0) {
-                    prefetchVideo(remaining[0].video_url).catch(() => {});
-                }
 
                 // Trigger background refill if pool is getting low
                 if (remaining.length < 5) {
