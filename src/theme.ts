@@ -24,7 +24,7 @@ export const Theme = {
 
     seam: '#2A2A2A',                 // Dark grey divider
     seamGlow: '#E8E4DF',             // Off-white glow on touch
-    waveformBar: 'rgba(0,0,0,0.6)', // Charcoal bars for audio indicator
+    audioBorder: '#FFFFFF',           // White outline on card with audio
 
     sheetBackground: 'rgba(26,26,26,0.95)',  // Charcoal, translucent
     sheetHandle: 'rgba(232,228,223,0.20)',

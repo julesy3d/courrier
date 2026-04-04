@@ -25,7 +25,7 @@ These are the source of truth. If code contradicts the docs, the docs win. If yo
 - **`reportJudgment` is fire-and-forget.** Never await it. Never put it on the critical path.
 - **All colors come from `src/theme.ts`.** No hardcoded color values in components.
 
-## Current state (v1.2.0 — Card Pool Architecture)
+## Current state (v1.2.1 — Streaker Audio)
 
 - Matchup pairing is fully client-side. Server is a card vending machine + scoreboard.
 - `reportJudgment` is fire-and-forget. Zero RPCs on the gameplay critical path.
@@ -35,6 +35,8 @@ These are the source of truth. If code contradicts the docs, the docs win. If yo
 - Stale pool cards return fuel to server on cold start via `return_unused_cards`.
 - Yeet sound is disabled (investigating audio session conflicts).
 - Ghost overlay system: dead card flies away on top while new card mounts underneath. Eliminates grey dead zone.
+- **Audio: streaking card gets the mic.** Only the survivor (streak holder) plays audio. To hear the other card, yeet the streaker. No loop-based alternation.
+- **AudioGlow indicator:** gradient border visible on the seam half of the playing card, fading toward the outer edge. Gentle opacity pulse. Uses `expo-linear-gradient`.
 - `playing=false` → `playing=true` events still fire on surviving cards but recover immediately.
 
 ## Stack
@@ -55,7 +57,7 @@ Expo SDK 55, Expo Router v4, expo-video, expo-audio, react-native-reanimated v3,
 
 ## Palette
 
-- Background: `#B7B3AA` (warm grey)
-- Accent: `#01E048` (bright green)
-- Secondary: `#2C7B45` (forest green)
-- Text: `#1A1A1A` (near-black)
+- Background: `#121212` (near-black)
+- Surface: `#1A1A1A` (charcoal)
+- Accent: `#E8E4DF` (off-white)
+- Text: `#E8E4DF` (off-white)

@@ -9,12 +9,11 @@ interface CardFaceProps {
     card: Card;
     isPlaying: boolean;
     muted?: boolean;
-    onLoopComplete?: () => void;
     style?: ViewStyle;
     slot?: string;
 }
 
-export default function CardFace({ card, isPlaying, muted = true, onLoopComplete, style, slot = '?' }: CardFaceProps) {
+export default function CardFace({ card, isPlaying, muted = true, style, slot = '?' }: CardFaceProps) {
     const videoUri = getVideoUri(card.video_url);
     const isLocal = videoUri !== card.video_url;
 
@@ -38,16 +37,6 @@ export default function CardFace({ card, isPlaying, muted = true, onLoopComplete
         player.muted = muted;
         if (__DEV__) console.log(`[CardFace:${slot}] muted=${muted} card=${card.id.slice(0, 8)}`);
     }, [player, muted]);
-
-    // ── Notify parent when one loop cycle completes (for audio alternation) ──
-    useEffect(() => {
-        if (!onLoopComplete) return;
-        const sub = player.addListener('playToEnd', () => {
-            if (__DEV__) console.log(`[CardFace:${slot}] loopComplete card=${card.id.slice(0, 8)}`);
-            onLoopComplete();
-        });
-        return () => { sub.remove(); };
-    }, [player, onLoopComplete]);
 
     // ── DEV-only: listen for player status changes to detect freezes ──
     useEffect(() => {

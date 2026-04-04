@@ -1,7 +1,7 @@
 # Yeet — Client Architecture
 
 > **Source of truth for the frontend.** If something contradicts this document, this document wins.
-> Last updated: 2026-03-27 (v1.2.0 — Card Pool Architecture)
+> Last updated: 2026-04-04 (v1.2.1 — Streaker Audio + AudioGlow)
 
 ---
 
@@ -21,7 +21,9 @@
 | Bottom sheets | `@gorhom/bottom-sheet` | v5 |
 | File system | `expo-file-system` (new API: `File`, `Directory`, `Paths`) | SDK 55 |
 
-**NOT used:** `expo-av` (replaced by `expo-video` + `expo-audio`), `@shopify/react-native-skia`, `expo-linear-gradient`.
+| Gradients | `expo-linear-gradient` | SDK 55 |
+
+**NOT used:** `expo-av` (replaced by `expo-video` + `expo-audio`), `@shopify/react-native-skia`.
 
 ---
 
@@ -32,8 +34,8 @@
 | File | Role |
 |------|------|
 | `src/app/(main)/index.tsx` | Main screen. Renders MatchupView or EmptyState. Floating buttons (account top-left, leaderboard top-right, "+" FAB bottom-center). Manages card pool lifecycle: initial fetch, pool-to-matchup popping, refill on resume. |
-| `src/components/MatchupView.tsx` | **Core component.** Yeet gesture, independent slot state, local matchup sequencing (winner stays, next challenger from pool), seam glow, yeet animation. Judgment is fire-and-forget. Key on `Reanimated.View` (not CardFace) for fresh native layers. |
-| `src/components/CardFace.tsx` | Video renderer. `useVideoPlayer` + `VideoView`. Accepts `card`, `isPlaying`, `slot`. Uses `audioMixingMode: 'mixWithOthers'` to prevent iOS audio session conflicts. DEV-only status/playing listeners for debugging. |
+| `src/components/MatchupView.tsx` | **Core component.** Yeet gesture, independent slot state, local matchup sequencing (winner stays, next challenger from pool), seam glow, yeet animation, ghost overlay, audio slot management (streaker gets mic), AudioGlow indicator. Judgment is fire-and-forget. Key on `Reanimated.View` (not CardFace) for fresh native layers. |
+| `src/components/CardFace.tsx` | Video renderer. `useVideoPlayer` + `VideoView`. Accepts `card`, `isPlaying`, `muted`, `slot`. Uses `audioMixingMode: 'mixWithOthers'` to prevent iOS audio session conflicts. Syncs `player.muted` when prop changes. DEV-only status/playing listeners for debugging. |
 | `src/lib/store.ts` | Zustand store. Card pool management (`fetchCardPool`, `popChallenger`), fire-and-forget judgment (`reportJudgment`), all backend communication via `supabase.rpc()`. |
 | `src/lib/videoCache.ts` | Local file cache for videos. Downloads to `Paths.cache/videos/`. Sync lookup via `getVideoUri()`. |
 | `src/lib/sounds.ts` | Sound asset exports. Currently just `YEET_SOUND`. |
@@ -171,13 +173,13 @@ Only files matching pool video URLs are kept. Everything else is deleted.
 ### Layout
 
 - Two video slots stacked vertically, each `flex: 1`
-- 2px seam between them (Theme.colors.seam — `#2C7B45`)
+- 2px seam between them (Theme.colors.seam — `#2A2A2A`)
 - `overflow: 'visible'` on slots (allows yeeted card to fly out of bounds)
 
 ### Gesture (`Gesture.Pan`)
 
 - Touch must start within `SEAM_ZONE_HALF` (40px) of the seam
-- A green radial glow appears and follows the finger
+- A radial glow appears and follows the finger
 - When `|translationY| > YEET_THRESHOLD` (60px), yeet triggers
 - **Swipe up = top card flies up and off screen. Bottom survives.**
 - **Swipe down = bottom card flies down and off screen. Top survives.**
@@ -209,6 +211,20 @@ The yeet mounts a "ghost" overlay with the dead card flying away, while the slot
 **Pool empty fallback:** When `popChallenger()` returns null, no ghost is used. `yeetingSlotSV` drives the slot animation directly (old behavior), then `onJudged()` is called.
 
 **Key insight:** Three `VideoPlayer`s are briefly active (survivor + new challenger + ghost). `audioMixingMode: 'mixWithOthers'` prevents iOS audio session conflicts. The ghost's player starts from the beginning of the dead card's video, but this is imperceptible during a fast fly-away with rotation.
+
+### Audio — Streaker Gets the Mic
+
+Only one card plays audio at a time. The **streaking card** (the survivor that keeps winning) has audio on. The new challenger arrives silent. To hear the other card, the user must yeet the current streaker.
+
+- `audioSlot` React state tracks which slot (`'top'` or `'bottom'`) has audio
+- `CardFace` receives `muted` prop; a `useEffect` syncs `player.muted` when it changes
+- On yeet, `setAudioSlotBoth(survivorSlot)` gives the mic to the survivor
+- On initial load, audio slot is randomly assigned (both cards are new)
+- Ghost overlay is always `muted={true}`
+
+**AudioGlow indicator:** A gradient border overlay rendered inside each slot. The border is visible on the seam-facing half and fades to transparent toward the outer screen edge (using `expo-linear-gradient`). The seam-side edge has a white glow shadow (`shadowRadius: 8`). A gentle Reanimated opacity pulse (1.0 ↔ 0.5, 1800ms cycle) gives it life. `pointerEvents="none"` ensures it doesn't block gestures.
+
+**Why not alternation?** We tried loop-based audio alternation (switch mic on each `playToEnd` event). The audio focal point caused users to tunnel-vision on whichever card had sound, ignoring the duel entirely. The streaker model forces engagement with both cards: you hear the winner, you see the silent newcomer, and you must actively choose to change the audio.
 
 ### Sound & Haptics
 
@@ -390,7 +406,7 @@ src/app/
 │  ┌───────────────────────┐  │
 │  │     TOP VIDEO         │  │  ← Reanimated.View key={topCard.id}
 │  │                       │  │     └ CardFace card={topCard}
-│  ├───────────────────────┤  │  ← 2px green seam
+│  ├───────────────────────┤  │  ← 2px dark seam
 │  │     BOTTOM VIDEO      │  │  ← Reanimated.View key={bottomCard.id}
 │  │                       │  │     └ CardFace card={bottomCard}
 │  └───────────────────────┘  │
@@ -401,25 +417,26 @@ src/app/
 
 ---
 
-## Visual Style — "Warm Green" Palette
+## Visual Style — Dark Palette
 
 All colors and fonts are defined in `src/theme.ts` and imported as `Theme`. No hardcoded colors anywhere in components.
 
 | Token | Value | Usage |
 |-------|-------|-------|
-| `background` | `#B7B3AA` | Warm grey — app chrome, video slot backgrounds |
-| `surface` | `#A8A49B` | Elevated surfaces, sheets |
-| `surfaceAlt` | `#9F9B92` | Thumbnail backgrounds, subtle depth |
-| `accent` | `#01E048` | Primary brand green — CTA buttons, highlights, glow |
-| `accentMuted` | `rgba(1,224,72,0.25)` | Seam glow background |
-| `secondary` | `#2C7B45` | Darker forest green — seam, secondary actions |
-| `textPrimary` | `#1A1A1A` | Near-black on warm background |
-| `textSecondary` | `rgba(26,26,26,0.55)` | Secondary text, timestamps |
-| `textTertiary` | `rgba(26,26,26,0.38)` | Muted text, hints |
-| `textOnAccent` | `#1A1A1A` | Dark text on green buttons |
-| `danger` | `#FF3B30` | Errors, recording indicator |
-| `seam` | `#2C7B45` | The 2px line between video slots |
-| `seamGlow` | `#01E048` | Glow color on touch near seam |
+| `background` | `#121212` | Near-black — app chrome, video slot backgrounds |
+| `surface` | `#1A1A1A` | Charcoal — elevated surfaces, sheets |
+| `surfaceAlt` | `#222222` | Slightly lighter charcoal, subtle depth |
+| `accent` | `#E8E4DF` | Off-white — primary actions, highlights |
+| `accentMuted` | `rgba(232,228,223,0.15)` | Subtle glow, seam glow background |
+| `secondary` | `#3A3A3A` | Mid-grey — secondary actions |
+| `textPrimary` | `#E8E4DF` | Off-white on dark background |
+| `textSecondary` | `rgba(232,228,223,0.50)` | Secondary text, timestamps |
+| `textTertiary` | `rgba(232,228,223,0.30)` | Muted text, hints |
+| `textOnAccent` | `#121212` | Dark text on off-white buttons |
+| `danger` | `#8B4040` | Muted red |
+| `seam` | `#2A2A2A` | The 2px line between video slots |
+| `seamGlow` | `#E8E4DF` | Off-white glow on touch near seam |
+| `audioBorder` | `#FFFFFF` | AudioGlow border on card with active audio |
 | `fonts.base` | `Verdana` | All UI text |
 | `fonts.mono` | `Menlo` | Numbers: win counts, ranks, timestamps |
 
@@ -437,7 +454,7 @@ Videos remain edge-to-edge, `contentFit="cover"`, no border radius.
 
 4. **Black flash on card swap.** Largely mitigated by the ghost overlay — the dead card flies away on top while the new CardFace mounts and starts rendering underneath. The ghost covers the mount cycle. Any remaining flash is hidden behind the ghost during the 500ms animation.
 
-5. **Test videos are static colors.** 20 of 26 test videos are solid-color 720×720 MP4s. Makes it hard to spot freezing bugs. Need real motion test videos.
+5. **Test videos.** 37 Pexels clips trimmed to 5s with audio. Seeded via `scripts/seed-test-data.mjs` (requires `SUPABASE_SERVICE_KEY` env var). 1-2 may have silent audio tracks.
 
 6. **Videos are 9:16, not square.** Camera records full sensor frame. Crop guide in VideoCapture is visual only. `contentFit="cover"` handles display cropping.
 
