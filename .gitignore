@@ -45,3 +45,9 @@ app-example
 # test data & scripts with keys
 test_videos/
 scripts/
+
+# design scratch (PSDs, icon bundles, old icons)
+*.psd
+*.icon
+*.old.*
+tests logos/
