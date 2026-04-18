@@ -1,6 +1,18 @@
 import React, { useRef, useState } from 'react';
-import { View, StyleSheet, TouchableOpacity, Text, Dimensions, ActivityIndicator } from 'react-native';
+import {
+    View,
+    StyleSheet,
+    TouchableOpacity,
+    Text,
+    TextInput,
+    Dimensions,
+    ActivityIndicator,
+    KeyboardAvoidingView,
+    Platform,
+    Keyboard,
+} from 'react-native';
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
+import * as ImagePicker from 'expo-image-picker';
 import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,6 +26,8 @@ const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 const GUIDE_PADDING = 12;
 const GUIDE_WIDTH = screenWidth - GUIDE_PADDING * 2;
 const GUIDE_HEIGHT = GUIDE_WIDTH * (screenHeight / 2) / screenWidth;
+
+const CAPTION_MAX = 140;
 
 interface PhotoCaptureProps {
     onComplete: () => void;
@@ -32,6 +46,8 @@ export default function PhotoCapture({ onComplete, onClose }: PhotoCaptureProps)
     const [error, setError] = useState<string | null>(null);
     const [imageUri, setImageUri] = useState<string | null>(null);
     const [facing, setFacing] = useState<CameraType>('front');
+    const [caption, setCaption] = useState('');
+    const [showCaptionInput, setShowCaptionInput] = useState(false);
 
     if (!permission) return <View style={styles.container} />;
 
@@ -57,10 +73,30 @@ export default function PhotoCapture({ onComplete, onClose }: PhotoCaptureProps)
             const result = await cameraRef.current.takePictureAsync({ quality: 0.8 });
             if (result?.uri) {
                 setImageUri(result.uri);
+                setCaption('');
+                setShowCaptionInput(false);
                 setPhase('preview');
             }
         } catch (e) {
             console.error('Photo capture failed', e);
+        }
+    };
+
+    const pickFromLibrary = async () => {
+        try {
+            const result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ['images'],
+                quality: 0.8,
+                allowsEditing: true,
+            });
+            if (!result.canceled && result.assets[0]) {
+                setImageUri(result.assets[0].uri);
+                setCaption('');
+                setShowCaptionInput(false);
+                setPhase('preview');
+            }
+        } catch (e) {
+            console.error('Image picker failed', e);
         }
     };
 
@@ -78,7 +114,7 @@ export default function PhotoCapture({ onComplete, onClose }: PhotoCaptureProps)
                 session.access_token
             );
 
-            await createCard(url);
+            await createCard(url, caption.trim() || null);
 
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
             setPhase('done');
@@ -91,6 +127,15 @@ export default function PhotoCapture({ onComplete, onClose }: PhotoCaptureProps)
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
             setError(e instanceof Error ? e.message : 'Something went wrong');
             setPhase('error');
+        }
+    };
+
+    const handlePreviewTap = () => {
+        if (showCaptionInput) {
+            Keyboard.dismiss();
+            setShowCaptionInput(false);
+        } else {
+            setShowCaptionInput(true);
         }
     };
 
@@ -123,30 +168,76 @@ export default function PhotoCapture({ onComplete, onClose }: PhotoCaptureProps)
 
             {/* Preview View */}
             {phase === 'preview' && imageUri && (
-                <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center' }]}>
-                    <View style={styles.previewContainer}>
+                <KeyboardAvoidingView
+                    style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center' }]}
+                    behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                >
+                    <TouchableOpacity
+                        activeOpacity={1}
+                        onPress={handlePreviewTap}
+                        style={styles.previewContainer}
+                    >
                         <Image
                             source={{ uri: imageUri }}
                             style={StyleSheet.absoluteFill}
                             contentFit="cover"
                         />
-                    </View>
+                        {/* Caption overlay preview */}
+                        {caption.trim() !== '' && !showCaptionInput && (
+                            <View style={styles.captionPreviewWrap}>
+                                <View style={styles.captionPreviewBar}>
+                                    <Text style={styles.captionPreviewText}>{caption}</Text>
+                                </View>
+                            </View>
+                        )}
+                        {/* Tap hint */}
+                        {!caption && !showCaptionInput && (
+                            <View style={styles.captionHintWrap}>
+                                <Text style={styles.captionHintText}>Tap to add text</Text>
+                            </View>
+                        )}
+                    </TouchableOpacity>
 
-                    <View style={styles.previewActions}>
-                        <TouchableOpacity style={styles.actionBtn} onPress={() => {
-                            setPhase('idle');
-                            setImageUri(null);
-                        }}>
-                            <Ionicons name="close" size={24} color={Theme.colors.textPrimary} />
-                            <Text style={styles.actionText}>Retake</Text>
-                        </TouchableOpacity>
+                    {/* Caption text input */}
+                    {showCaptionInput && (
+                        <View style={styles.captionInputWrap}>
+                            <TextInput
+                                style={styles.captionInput}
+                                value={caption}
+                                onChangeText={(t) => setCaption(t.slice(0, CAPTION_MAX))}
+                                placeholder="Add a caption..."
+                                placeholderTextColor={Theme.colors.textTertiary}
+                                maxLength={CAPTION_MAX}
+                                autoFocus
+                                returnKeyType="done"
+                                onSubmitEditing={() => {
+                                    Keyboard.dismiss();
+                                    setShowCaptionInput(false);
+                                }}
+                                multiline={false}
+                            />
+                            <Text style={styles.captionCount}>{caption.length}/{CAPTION_MAX}</Text>
+                        </View>
+                    )}
 
-                        <TouchableOpacity style={[styles.actionBtn, styles.sendBtn]} onPress={handleSend}>
-                            <Text style={[styles.actionText, { fontWeight: '600' }]}>Send</Text>
-                            <Ionicons name="paper-plane" size={20} color={Theme.colors.textPrimary} />
-                        </TouchableOpacity>
-                    </View>
-                </View>
+                    {!showCaptionInput && (
+                        <View style={styles.previewActions}>
+                            <TouchableOpacity style={styles.actionBtn} onPress={() => {
+                                setPhase('idle');
+                                setImageUri(null);
+                                setCaption('');
+                            }}>
+                                <Ionicons name="close" size={24} color={Theme.colors.textPrimary} />
+                                <Text style={styles.actionText}>Retake</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity style={[styles.actionBtn, styles.sendBtn]} onPress={handleSend}>
+                                <Text style={[styles.actionText, { fontWeight: '600' }]}>Send</Text>
+                                <Ionicons name="paper-plane" size={20} color={Theme.colors.textPrimary} />
+                            </TouchableOpacity>
+                        </View>
+                    )}
+                </KeyboardAvoidingView>
             )}
 
             {/* Uploading & Status Overlays */}
@@ -197,6 +288,15 @@ export default function PhotoCapture({ onComplete, onClose }: PhotoCaptureProps)
                     </TouchableOpacity>
 
                     <View style={[styles.shutterHost, { bottom: insets.bottom + 40 }]}>
+                        {/* Gallery picker */}
+                        <TouchableOpacity
+                            style={styles.galleryButton}
+                            onPress={pickFromLibrary}
+                        >
+                            <Ionicons name="images-outline" size={28} color={Theme.colors.textPrimary} />
+                        </TouchableOpacity>
+
+                        {/* Shutter */}
                         <TouchableOpacity
                             activeOpacity={0.9}
                             onPress={takePicture}
@@ -204,6 +304,9 @@ export default function PhotoCapture({ onComplete, onClose }: PhotoCaptureProps)
                         >
                             <View style={styles.shutterInner} />
                         </TouchableOpacity>
+
+                        {/* Spacer to balance the row */}
+                        <View style={{ width: 48 }} />
                     </View>
                 </>
             )}
@@ -293,13 +396,13 @@ const styles = StyleSheet.create({
         backgroundColor: overlayBg,
     },
 
-    // Shutter
+    // Shutter row
     shutterHost: {
         position: 'absolute',
         alignSelf: 'center',
-        width: 80,
-        height: 80,
-        justifyContent: 'center',
+        width: screenWidth * 0.6,
+        flexDirection: 'row',
+        justifyContent: 'space-between',
         alignItems: 'center',
     },
     shutterBtn: {
@@ -317,6 +420,14 @@ const styles = StyleSheet.create({
         height: 64,
         borderRadius: 32,
         backgroundColor: Theme.colors.textPrimary,
+    },
+    galleryButton: {
+        width: 48,
+        height: 48,
+        borderRadius: 24,
+        backgroundColor: Theme.colors.buttonBackground,
+        justifyContent: 'center',
+        alignItems: 'center',
     },
 
     // Preview
@@ -348,6 +459,70 @@ const styles = StyleSheet.create({
         color: Theme.colors.textPrimary,
         fontSize: 16,
         marginHorizontal: 8,
+    },
+
+    // Caption overlay on preview image
+    captionPreviewWrap: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        bottom: '18%',
+        alignItems: 'center',
+        paddingHorizontal: 16,
+    },
+    captionPreviewBar: {
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        borderRadius: 4,
+        maxWidth: '100%',
+    },
+    captionPreviewText: {
+        fontFamily: Theme.fonts.base,
+        fontSize: 15,
+        fontWeight: '600',
+        color: '#FFFFFF',
+        textAlign: 'center',
+    },
+
+    // Tap hint
+    captionHintWrap: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        bottom: '18%',
+        alignItems: 'center',
+    },
+    captionHintText: {
+        fontFamily: Theme.fonts.base,
+        fontSize: 13,
+        color: 'rgba(255,255,255,0.5)',
+    },
+
+    // Caption input
+    captionInputWrap: {
+        width: GUIDE_WIDTH,
+        marginTop: 16,
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    captionInput: {
+        flex: 1,
+        fontFamily: Theme.fonts.base,
+        fontSize: 16,
+        color: Theme.colors.textPrimary,
+        backgroundColor: Theme.colors.inputBackground,
+        borderWidth: 1,
+        borderColor: Theme.colors.inputBorder,
+        borderRadius: 12,
+        paddingHorizontal: 16,
+        paddingVertical: 12,
+    },
+    captionCount: {
+        fontFamily: Theme.fonts.mono,
+        fontSize: 11,
+        color: Theme.colors.textTertiary,
+        marginLeft: 8,
     },
 
     // Status

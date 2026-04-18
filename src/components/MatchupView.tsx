@@ -1,10 +1,12 @@
 import React, { useState, useRef, useCallback } from 'react';
-import { View, StyleSheet, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, Dimensions } from 'react-native';
 import Reanimated, {
     SharedValue,
     useSharedValue,
     useAnimatedStyle,
     withTiming,
+    withDelay,
+    withSequence,
     Easing,
     runOnJS,
 } from 'react-native-reanimated';
@@ -30,6 +32,11 @@ const YEET_DURATION = 500;
 const YEET_TRANSLATE_Y = SCREEN_HEIGHT;
 const YEET_TRANSLATE_X_MAX = 140;
 const YEET_ROTATION = 40;
+
+// ─── Verdict emoji tuning ───
+const VERDICT_HOLD_MS = 80;
+const VERDICT_FADE_MS = 300;
+const VERDICT_EMOJI_SIZE = 200;
 
 // Delay before ending when pool is empty (let animation play)
 const SWAP_DELAY_MS = 200;
@@ -65,6 +72,36 @@ const glowStyles = StyleSheet.create({
         shadowOffset: { width: 0, height: 0 },
         shadowOpacity: 0.5,
         shadowRadius: 20,
+    },
+});
+
+// ─── Verdict emoji overlay ───
+function VerdictEmoji({ emoji, opacity, scale }: {
+    emoji: string;
+    opacity: SharedValue<number>;
+    scale: SharedValue<number>;
+}) {
+    const style = useAnimatedStyle(() => ({
+        opacity: opacity.value,
+        transform: [{ scale: scale.value }],
+    }));
+
+    return (
+        <Reanimated.View style={[verdictStyles.container, style]} pointerEvents="none">
+            <Text style={verdictStyles.emoji}>{emoji}</Text>
+        </Reanimated.View>
+    );
+}
+
+const verdictStyles = StyleSheet.create({
+    container: {
+        ...StyleSheet.absoluteFillObject,
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 15,
+    },
+    emoji: {
+        fontSize: VERDICT_EMOJI_SIZE,
     },
 });
 
@@ -108,6 +145,11 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
     const yeetTranslateX = useSharedValue(0);
     const yeetRotation = useSharedValue(0);
 
+    // --- Verdict emoji animation values ---
+    const [verdict, setVerdict] = useState<{ keptSlot: 'top' | 'bottom' } | null>(null);
+    const verdictOpacity = useSharedValue(0);
+    const verdictScale = useSharedValue(0.3);
+
     // --- Glow state ---
     const glowX = useSharedValue(0);
     const glowY = useSharedValue(0);
@@ -117,6 +159,23 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
 
     const seamY = containerHeight / 2;
 
+    // --- Fire verdict emoji animation ---
+    const showVerdict = useCallback((keptSlot: 'top' | 'bottom') => {
+        setVerdict({ keptSlot });
+        verdictScale.value = 0.3;
+        verdictOpacity.value = 1;
+        verdictScale.value = withSequence(
+            withTiming(1.15, { duration: 120, easing: Easing.out(Easing.back(2)) }),
+            withTiming(1, { duration: 80 }),
+        );
+        verdictOpacity.value = withDelay(
+            VERDICT_HOLD_MS,
+            withTiming(0, { duration: VERDICT_FADE_MS }),
+        );
+        // Clear state after animation
+        setTimeout(() => setVerdict(null), VERDICT_HOLD_MS + VERDICT_FADE_MS + 50);
+    }, []);
+
     // --- Judge handler ---
     const handleYeet = useCallback((direction: 'up' | 'down') => {
         if (hasJudgedRef.current) return;
@@ -125,10 +184,14 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
 
         const deadSlot: 'top' | 'bottom' = direction === 'up' ? 'top' : 'bottom';
+        const keptSlot: 'top' | 'bottom' = direction === 'up' ? 'bottom' : 'top';
         const keptCardId = direction === 'up' ? bottomCardIdRef.current : topCardIdRef.current;
 
         if (onPhaseChange) onPhaseChange('YEETING');
         glowOpacity.value = withTiming(0, { duration: 100 });
+
+        // ── Show verdict emojis ──
+        showVerdict(keptSlot);
 
         // ── Streak tracking ──
         if (keptCardId === streakCardRef.current) {
@@ -206,9 +269,28 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
             }, SWAP_DELAY_MS);
         }
 
-    }, [reportJudgment, popChallenger, onJudged, onPhaseChange]);
+    }, [reportJudgment, popChallenger, onJudged, onPhaseChange, showVerdict]);
 
-    // --- Gesture ---
+    // --- Double-tap handler ---
+    const handleDoubleTap = useCallback((y: number) => {
+        if (hasJudgedRef.current) return;
+        // Tapped on top card → keep top → yeet bottom (down)
+        // Tapped on bottom card → keep bottom → yeet top (up)
+        if (y < seamY) {
+            handleYeet('down');
+        } else {
+            handleYeet('up');
+        }
+    }, [seamY, handleYeet]);
+
+    // --- Gestures ---
+    const doubleTapGesture = Gesture.Tap()
+        .numberOfTaps(2)
+        .maxDuration(300)
+        .onEnd((e) => {
+            runOnJS(handleDoubleTap)(e.y);
+        });
+
     const panGesture = Gesture.Pan()
         .onBegin((e) => {
             const distFromSeam = Math.abs(e.y - seamY);
@@ -240,6 +322,9 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
         .onFinalize(() => {
             glowOpacity.value = withTiming(0, { duration: 200 });
         });
+
+    // Double-tap can fire anywhere; pan only near seam. Exclusive: pan wins if near seam.
+    const composedGesture = Gesture.Exclusive(panGesture, doubleTapGesture);
 
     // --- Animated styles ---
     const topAnimatedStyle = useAnimatedStyle(() => {
@@ -284,7 +369,7 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
             style={styles.container}
             onLayout={(e) => setContainerHeight(e.nativeEvent.layout.height)}
         >
-            <GestureDetector gesture={panGesture}>
+            <GestureDetector gesture={composedGesture}>
                 <Reanimated.View style={styles.gestureContainer}>
 
                     {/* TOP SLOT */}
@@ -293,6 +378,13 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
                         style={[styles.videoHalf, topAnimatedStyle]}
                     >
                         <CardFace card={topCard} />
+                        {verdict && (
+                            <VerdictEmoji
+                                emoji={verdict.keptSlot === 'top' ? '✅' : '❌'}
+                                opacity={verdictOpacity}
+                                scale={verdictScale}
+                            />
+                        )}
                     </Reanimated.View>
 
                     {/* Seam */}
@@ -304,6 +396,13 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
                         style={[styles.videoHalf, bottomAnimatedStyle]}
                     >
                         <CardFace card={bottomCard} />
+                        {verdict && (
+                            <VerdictEmoji
+                                emoji={verdict.keptSlot === 'bottom' ? '✅' : '❌'}
+                                opacity={verdictOpacity}
+                                scale={verdictScale}
+                            />
+                        )}
                     </Reanimated.View>
 
                     {/* Seam glow */}

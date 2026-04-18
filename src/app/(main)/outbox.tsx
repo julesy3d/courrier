@@ -11,8 +11,11 @@ import { Theme } from '../../theme';
 
 const { width } = Dimensions.get('window');
 
-function OutboxCard({ item, onPress }: { item: any; onPress: () => void }) {
+function OutboxCard({ item, lang, onPress }: { item: any; lang: string; onPress: () => void }) {
     const isDead = item.pending_views === 0;
+    const theme = item.objective
+        ? (lang === 'fr' ? item.objective.theme_fr : item.objective.theme_en)
+        : null;
 
     return (
         <TouchableOpacity
@@ -26,6 +29,13 @@ function OutboxCard({ item, onPress }: { item: any; onPress: () => void }) {
                     style={StyleSheet.absoluteFill}
                     contentFit="cover"
                 />
+
+                {/* Objective badge */}
+                {theme && (
+                    <View style={styles.themeBadge}>
+                        <Text style={styles.themeBadgeText} numberOfLines={1}>{theme}</Text>
+                    </View>
+                )}
 
                 {isDead && (
                     <View style={styles.deadOverlay}>
@@ -46,7 +56,8 @@ function OutboxCard({ item, onPress }: { item: any; onPress: () => void }) {
 }
 
 export default function OutboxScreen() {
-    const { cachedOutbox, fetchOutbox } = useStore();
+    const { cachedOutbox, fetchOutbox, currentUser } = useStore();
+    const lang = currentUser?.lang ?? 'en';
     const router = useRouter();
     const insets = useSafeAreaInsets();
     const [isLoading, setIsLoading] = useState(true);
@@ -87,6 +98,7 @@ export default function OutboxScreen() {
                         renderItem={({ item }) => (
                             <OutboxCard
                                 item={item}
+                                lang={lang}
                                 onPress={() => {
                                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                                     setSelectedPostId(item.id);
@@ -124,6 +136,8 @@ const styles = StyleSheet.create({
     row: { justifyContent: 'space-between', marginBottom: 16 },
     card: { width: (width - 48) / 2 },
     thumbnailContainer: { width: '100%', aspectRatio: 3/4, borderRadius: 8, overflow: 'hidden', backgroundColor: Theme.colors.surfaceAlt },
+    themeBadge: { position: 'absolute', bottom: 6, left: 4, right: 4, backgroundColor: 'rgba(0,0,0,0.65)', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 3 },
+    themeBadgeText: { fontFamily: Theme.fonts.base, fontSize: 10, color: Theme.colors.textPrimary, textAlign: 'center' },
     deadOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: Theme.colors.overlay, justifyContent: 'center', alignItems: 'center' },
     cardInfo: { marginTop: 8 },
     creatorName: { fontFamily: Theme.fonts.base, color: Theme.colors.textPrimary, fontSize: 14, fontWeight: '500' },

@@ -1,7 +1,7 @@
 # Yeet — Client Architecture
 
 > **Source of truth for the frontend.** If something contradicts this document, this document wins.
-> Last updated: 2026-04-04 (v2.0.0 — Photo Mode)
+> Last updated: 2026-04-10 (v2.2.0 — Open Submissions + Leaderboard Revamp)
 
 ---
 
@@ -15,6 +15,7 @@
 | Animation | `react-native-reanimated` | v3 |
 | Gestures | `react-native-gesture-handler` (`Gesture.Pan`) | v2 |
 | Camera | `expo-camera` (`CameraView` + `takePictureAsync`) | SDK 55 |
+| Image Picker | `expo-image-picker` (camera roll) | SDK 55 |
 | Haptics | `expo-haptics` | SDK 55 |
 | State | Zustand with AsyncStorage persistence | v4 |
 | Bottom sheets | `@gorhom/bottom-sheet` | v5 |
@@ -30,18 +31,18 @@
 
 | File | Role |
 |------|------|
-| `src/app/(main)/index.tsx` | Main screen. Renders MatchupView or EmptyState. Floating buttons (account top-left, leaderboard top-right, "+" FAB bottom-center). Manages card pool lifecycle: initial fetch, pool-to-matchup popping, refill on resume. |
+| `src/app/(main)/index.tsx` | Main screen. Renders MatchupView or EmptyState. Floating buttons (account top-left, leaderboard top-right, "+" FAB bottom-center always visible). Manages card pool lifecycle: initial fetch, pool-to-matchup popping, refill on resume. |
 | `src/components/MatchupView.tsx` | **Core component.** Yeet gesture, independent slot state, local matchup sequencing (winner stays, next challenger from pool), seam glow, yeet animation, ghost overlay. Judgment is fire-and-forget. Key on `Reanimated.View` (not CardFace) for fresh native layers. |
-| `src/components/CardFace.tsx` | Image renderer. `expo-image` `Image` with `contentFit="cover"` and `transition={200}`. Accepts `card` and optional `style`. |
-| `src/components/PhotoCapture.tsx` | Tap-to-shoot photo capture. Front camera default, flip toggle. Crop guide, preview with retake/send, upload with progress states. |
+| `src/components/CardFace.tsx` | Image renderer. `expo-image` `Image` with `contentFit="cover"`. Renders optional `caption` overlay (Snapchat-style black bar, bottom third). Accepts `card` and optional `style`. No transition — ghost overlay handles visual masking during swaps. |
+| `src/components/PhotoCapture.tsx` | Tap-to-shoot photo capture + camera roll picker (`expo-image-picker`). Front camera default, flip toggle. Crop guide, preview with caption text input (140 chars, tap image to add), retake/send, upload with progress states. |
 | `src/lib/store.ts` | Zustand store. Card pool management (`fetchCardPool`, `popChallenger`), fire-and-forget judgment (`reportJudgment`), all backend communication via `supabase.rpc()`. |
 | `src/lib/imageUtils.ts` | `uploadCardImage()` — uploads JPEG to `card_videos` bucket (legacy name). |
 | `src/components/EmptyState.tsx` | Shown when no matchups available. |
 | `src/components/GlassSurface.tsx` | BlurView wrapper. Used by FAB. |
-| `src/app/(main)/leaderboard.tsx` | Leaderboard screen. Top 5 with image thumbnails, rest as text rows with tap-to-preview. |
+| `src/app/(main)/leaderboard.tsx` | Leaderboard with 3 tabs (Today / All Time / Mine). Brick wall image layout: #1 full-width hero, #2-3 two-up, #4+ four-up rows. Pull to refresh. Tap image for full-screen preview. |
 | `src/app/onboarding.tsx` | @username input, uniqueness check, camera permission. |
 | `src/app/(main)/profile.tsx` | Links to outbox. |
-| `src/app/(main)/outbox.tsx` | User's created cards with stats. Image thumbnails. |
+| `src/app/(main)/outbox.tsx` | User's created cards with stats. Image thumbnails. (Legacy — "Mine" tab in leaderboard replaces this for most users.) |
 | `src/lib/supabase.ts` | Supabase client init. |
 | `src/lib/notifications.ts` | Push token registration. |
 | `src/lib/i18n.ts` | Locale detection + translation helper. |
@@ -134,7 +135,7 @@ Storage key: `'cards-storage'`
 ### Key Types
 
 ```typescript
-Card: { id, video_url, sender_id, creator_username, emoji_tallies, total_wins, comment_count }
+Card: { id, video_url, sender_id, creator_username, emoji_tallies, total_wins, comment_count, caption }
 ```
 
 Note: `video_url` field name is a legacy artifact — it now contains image URLs.
@@ -175,6 +176,8 @@ reportJudgment(cardAId, cardBId, keptCardId, emoji, streak)
 | `reportJudgment(...)` | Fire-and-forget RPC call | **Never** |
 | `returnUnusedCards(cardIds)` | Fire-and-forget fuel refund for unplayed pool cards | **Never** |
 | `heartbeat()` | Update `last_active_at` | No |
+| `fetchDailyObjective()` | RPC → set `dailyObjective` state | No (async) |
+| `setDailyObjective(date, en, fr)` | Admin-only RPC → upsert objective | No (async) |
 
 ---
 
@@ -241,9 +244,10 @@ src/app/
   (main)/
     _layout.tsx        — Stack navigator
     index.tsx          — Duel screen (MatchupView)
-    profile.tsx        — User profile
+    profile.tsx        — User profile + admin link (if is_admin)
     outbox.tsx         — Cards user has created
-    leaderboard.tsx    — Top images by wins
+    leaderboard.tsx    — Daily leaderboard (6am-9pm) / winner (9pm-6am)
+    admin.tsx          — Admin: set daily objectives
     settings.tsx       — Language, account settings
 ```
 
@@ -293,6 +297,25 @@ Images remain edge-to-edge, `contentFit="cover"`, no border radius.
 
 ---
 
+## Daily Game Loop
+
+- Day runs **midnight to midnight UTC**. No submission time gating — FAB always visible.
+- `fetch_card_pool` scoped to cards created today (UTC `created_at`). Falls back to any card with fuel if none exist today.
+- **Leaderboard** (trophy button) has 3 tabs:
+  - **Today** — cards ranked by wins earned today (`get_daily_leaderboard` RPC, UTC date)
+  - **All Time** — cards ranked by lifetime `total_wins` (`get_leaderboard` RPC)
+  - **Mine** — current user's cards ranked by `total_wins` (direct PostgREST query)
+- Brick wall layout: #1 full-width hero, #2-3 two-up, #4+ four-up rows. Pull to refresh.
+
+### Caption / Text Overlay
+
+- During photo preview (after capture or camera roll pick), tap the image to add text (max 140 chars).
+- Text stored in `posts.caption` column (nullable text).
+- Rendered client-side by `CardFace`: Snapchat-style black semi-transparent bar (`rgba(0,0,0,0.5)`) with centered white text, positioned in the bottom third of the card.
+- Passed to `create_card` RPC via `p_caption` parameter. Returned by `fetch_card_pool` in JSON.
+
+---
+
 ## Known Issues & Next Steps
 
 1. **No judgment retry queue.** `reportJudgment` is fire-and-forget. If the network call fails, that judgment is lost. Acceptable for beta.
@@ -304,3 +327,7 @@ Images remain edge-to-edge, `contentFit="cover"`, no border radius.
 4. **Pool persistence across sessions.** `cardPool` and `poolExcludeIds` are persisted to AsyncStorage. On cold start, stale cards are returned to the server via `returnUnusedCards`, the pool is cleared, and a fresh batch is fetched.
 
 5. **`video_url` column name.** The DB column and Card type still use `video_url` — it now stores image URLs. Renaming is a future migration.
+
+6. **Push notifications not wired.** 9am objective and 9pm winner notifications need Supabase Edge Functions + pg_cron + Expo Push API. Tokens already in `users.push_token`.
+
+7. **`compute_daily_winner` called on-demand.** Currently triggered when viewing the winner screen. Should be automated via pg_cron at 9pm Paris time.

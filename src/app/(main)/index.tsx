@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, AppState, ActivityIndicator } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -29,13 +29,13 @@ export default function MainScreen() {
             const stalePool = useStore.getState().cardPool;
             if (stalePool.length > 0) {
                 returnUnusedCards(stalePool.map(c => c.id));
-                useStore.setState({ cardPool: [], poolExcludeIds: [] });
             }
+            // Reset pool state + clear any stuck fetch lock
+            useStore.setState({ cardPool: [], poolExcludeIds: [], isPoolFetching: false });
 
             await fetchCardPool(10);
 
             // Wait for the first 2 images to be cached before displaying.
-            // The rest are prefetched in background by fetchCardPool.
             const pool = useStore.getState().cardPool;
             if (pool.length >= 2) {
                 await Promise.all([
@@ -65,7 +65,6 @@ export default function MainScreen() {
         initPool();
         const sub = AppState.addEventListener('change', (state) => {
             if (state === 'active') {
-                // On resume: refill pool if low, don't reset current matchup
                 const pool = useStore.getState().cardPool;
                 if (pool.length < 5) {
                     fetchCardPool(10).catch(console.error);
@@ -95,7 +94,6 @@ export default function MainScreen() {
 
     const handleVideoCreated = () => {
         setShowCamera(false);
-        // Refill pool in background after creating a card
         const pool = useStore.getState().cardPool;
         if (pool.length < 5) {
             fetchCardPool(10).catch(console.error);
@@ -147,7 +145,7 @@ export default function MainScreen() {
                 )}
             </View>
 
-            {/* Buried FAB */}
+            {/* FAB — always visible */}
             {!showCamera && (
                 <TouchableOpacity
                     activeOpacity={0.85}

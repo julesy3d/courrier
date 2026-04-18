@@ -3,63 +3,43 @@ import {
     View,
     Text,
     StyleSheet,
-    FlatList,
+    ScrollView,
     ActivityIndicator,
     TouchableOpacity,
     RefreshControl,
     Modal,
+    Dimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { supabase } from '../../lib/supabase';
+import { useStore } from '../../lib/store';
 import { Theme } from '../../theme';
 
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const CARD_GAP = 3;
+
+type Tab = 'today' | 'alltime' | 'mine';
+
 type LeaderboardEntry = {
-    id: string;
+    post_id: string;
     video_url: string;
-    total_wins: number;
-    pending_views: number;
+    sender_id: string;
     creator_username: string;
-    rank: number;
+    wins: number;
+    caption?: string | null;
 };
 
-// ─── Thumbnail for top 5 ───
-function MiniPreview({ imageUrl, size }: { imageUrl: string; size: number }) {
-    return (
-        <View style={[miniStyles.container, { width: size, height: size }]}>
-            <Image
-                source={{ uri: imageUrl }}
-                style={StyleSheet.absoluteFill}
-                contentFit="cover"
-            />
-        </View>
-    );
-}
-
-const miniStyles = StyleSheet.create({
-    container: {
-        borderRadius: 6,
-        overflow: 'hidden',
-        marginRight: 10,
-        backgroundColor: 'rgba(255,255,255,0.05)',
-    },
-});
-
-// ─── Image preview modal (for entries below top 5) ──���
+// ─── Image preview modal ───
 function ImagePreviewModal({ imageUrl, visible, onClose }: {
     imageUrl: string | null;
     visible: boolean;
     onClose: () => void;
 }) {
     return (
-        <Modal
-            visible={visible}
-            transparent
-            animationType="fade"
-            onRequestClose={onClose}
-        >
+        <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
             <TouchableOpacity
                 style={previewStyles.backdrop}
                 activeOpacity={1}
@@ -87,8 +67,8 @@ const previewStyles = StyleSheet.create({
         alignItems: 'center',
     },
     imageContainer: {
-        width: '75%',
-        aspectRatio: 9 / 16,
+        width: '85%',
+        aspectRatio: 3 / 4,
         borderRadius: 12,
         overflow: 'hidden',
     },
@@ -98,99 +78,261 @@ const previewStyles = StyleSheet.create({
     },
 });
 
-// ─── Main screen ───
+// ─── Brick cell ───
+function BrickCell({ entry, rank, width, height, onPress }: {
+    entry: LeaderboardEntry;
+    rank: number;
+    width: number;
+    height: number;
+    onPress: () => void;
+}) {
+    return (
+        <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={onPress}
+            style={[brickStyles.cell, { width, height }]}
+        >
+            <Image
+                source={{ uri: entry.video_url }}
+                style={StyleSheet.absoluteFill}
+                contentFit="cover"
+            />
+            {/* Bottom gradient overlay for stats */}
+            <View style={brickStyles.overlay}>
+                <View style={brickStyles.statsRow}>
+                    <Text style={[brickStyles.stat, rank <= 3 && brickStyles.statLarge]}>
+                        ❤️ <Text style={brickStyles.statNum}>{entry.wins}</Text>
+                    </Text>
+                    <Text style={[brickStyles.stat, rank <= 3 && brickStyles.statLarge]}>
+                        🏆 <Text style={brickStyles.statNum}>{rank}</Text>
+                    </Text>
+                </View>
+                <Text
+                    style={[brickStyles.username, rank <= 3 && brickStyles.usernameLarge]}
+                    numberOfLines={1}
+                >
+                    @{entry.creator_username}
+                </Text>
+            </View>
+        </TouchableOpacity>
+    );
+}
+
+const brickStyles = StyleSheet.create({
+    cell: {
+        overflow: 'hidden',
+        backgroundColor: Theme.colors.surfaceAlt,
+    },
+    overlay: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        bottom: 0,
+        paddingHorizontal: 8,
+        paddingVertical: 6,
+        backgroundColor: 'rgba(0,0,0,0.45)',
+    },
+    statsRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        marginBottom: 2,
+    },
+    stat: {
+        fontSize: 11,
+        color: '#FFFFFF',
+    },
+    statLarge: {
+        fontSize: 14,
+    },
+    statNum: {
+        fontFamily: Theme.fonts.mono,
+        fontWeight: '700',
+    },
+    username: {
+        fontFamily: Theme.fonts.base,
+        fontSize: 10,
+        color: 'rgba(255,255,255,0.7)',
+    },
+    usernameLarge: {
+        fontSize: 13,
+    },
+});
+
+// ─── Brick wall layout ───
+function BrickWall({ entries, onSelect }: {
+    entries: LeaderboardEntry[];
+    onSelect: (url: string) => void;
+}) {
+    if (entries.length === 0) return null;
+
+    const fullWidth = SCREEN_WIDTH;
+
+    // #1: full-width hero
+    const heroHeight = fullWidth * 0.75;
+    // #2-3: two-up
+    const twoUpWidth = (fullWidth - CARD_GAP) / 2;
+    const twoUpHeight = twoUpWidth * 1.1;
+    // #4+: four-up
+    const fourUpWidth = (fullWidth - CARD_GAP * 3) / 4;
+    const fourUpHeight = fourUpWidth * 1.2;
+
+    const rows: React.ReactNode[] = [];
+    let idx = 0;
+
+    // Row 1: hero (#1)
+    if (idx < entries.length) {
+        const heroEntry = entries[idx];
+        rows.push(
+            <BrickCell
+                key={heroEntry.post_id}
+                entry={heroEntry}
+                rank={idx + 1}
+                width={fullWidth}
+                height={heroHeight}
+                onPress={() => onSelect(heroEntry.video_url)}
+            />
+        );
+        idx++;
+    }
+
+    // Row 2: two-up (#2, #3)
+    if (idx < entries.length) {
+        const row: React.ReactNode[] = [];
+        const rowStart = idx;
+        while (idx < entries.length && idx < rowStart + 2) {
+            const i = idx;
+            row.push(
+                <BrickCell
+                    key={entries[i].post_id}
+                    entry={entries[i]}
+                    rank={i + 1}
+                    width={twoUpWidth}
+                    height={twoUpHeight}
+                    onPress={() => onSelect(entries[i].video_url)}
+                />
+            );
+            idx++;
+        }
+        rows.push(
+            <View key={`row-2up`} style={[wallStyles.row, { gap: CARD_GAP }]}>
+                {row}
+            </View>
+        );
+    }
+
+    // Remaining: four-up rows
+    let rowNum = 0;
+    while (idx < entries.length) {
+        const row: React.ReactNode[] = [];
+        const rowStart = idx;
+        while (idx < entries.length && idx < rowStart + 4) {
+            const i = idx;
+            row.push(
+                <BrickCell
+                    key={entries[i].post_id}
+                    entry={entries[i]}
+                    rank={i + 1}
+                    width={fourUpWidth}
+                    height={fourUpHeight}
+                    onPress={() => onSelect(entries[i].video_url)}
+                />
+            );
+            idx++;
+        }
+        rows.push(
+            <View key={`row-4up-${rowNum}`} style={[wallStyles.row, { gap: CARD_GAP }]}>
+                {row}
+            </View>
+        );
+        rowNum++;
+    }
+
+    return <View style={{ gap: CARD_GAP }}>{rows}</View>;
+}
+
+const wallStyles = StyleSheet.create({
+    row: {
+        flexDirection: 'row',
+    },
+});
+
+// ═══════════════════════════════════════════════
+// MAIN LEADERBOARD SCREEN
+// ═══════════════════════════════════════════════
+
 export default function LeaderboardScreen() {
-    const insets = useSafeAreaInsets();
     const router = useRouter();
+    const insets = useSafeAreaInsets();
+    const { currentUser } = useStore();
+
+    const [tab, setTab] = useState<Tab>('today');
     const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
-    const fetchLeaderboard = useCallback(async () => {
+    const fetchData = useCallback(async (activeTab: Tab) => {
         try {
-            const { data, error } = await supabase.rpc('get_leaderboard', { p_limit: 50 });
-            if (error) throw error;
-            setEntries((data || []) as LeaderboardEntry[]);
+            if (activeTab === 'today') {
+                const { data, error } = await supabase.rpc('get_daily_leaderboard', {
+                    p_date: new Date().toISOString().split('T')[0],
+                });
+                if (error) throw error;
+                setEntries(((data || []) as any[]).map(d => ({
+                    post_id: d.post_id,
+                    video_url: d.video_url,
+                    sender_id: d.sender_id,
+                    creator_username: d.creator_username,
+                    wins: d.wins_today,
+                    caption: d.caption ?? null,
+                })));
+            } else if (activeTab === 'alltime') {
+                const { data, error } = await supabase.rpc('get_leaderboard', {
+                    p_limit: 50,
+                });
+                if (error) throw error;
+                setEntries(((data || []) as any[]).map(d => ({
+                    post_id: d.id,
+                    video_url: d.video_url,
+                    sender_id: '',
+                    creator_username: d.creator_username,
+                    wins: d.total_wins,
+                    caption: d.caption ?? null,
+                })));
+            } else {
+                // Mine: current user's cards ranked by total_wins
+                if (!currentUser) { setEntries([]); return; }
+                const { data, error } = await supabase
+                    .from('posts')
+                    .select('id, video_url, total_wins, sender_id, caption')
+                    .eq('sender_id', currentUser.id)
+                    .order('total_wins', { ascending: false })
+                    .limit(50);
+                if (error) throw error;
+                setEntries(((data || []) as any[]).map(d => ({
+                    post_id: d.id,
+                    video_url: d.video_url,
+                    sender_id: d.sender_id,
+                    creator_username: currentUser.display_name,
+                    wins: d.total_wins,
+                    caption: d.caption ?? null,
+                })));
+            }
         } catch (e) {
             console.error('Leaderboard fetch error:', e);
         }
-    }, []);
+    }, [currentUser]);
 
     useEffect(() => {
-        fetchLeaderboard().finally(() => setLoading(false));
-    }, []);
+        setLoading(true);
+        fetchData(tab).finally(() => setLoading(false));
+    }, [tab]);
 
     const onRefresh = useCallback(async () => {
         setRefreshing(true);
-        await fetchLeaderboard();
+        await fetchData(tab);
         setRefreshing(false);
-    }, [fetchLeaderboard]);
-
-    const maxWins = entries.length > 0 ? entries[0].total_wins : 1;
-
-    const renderItem = ({ item, index }: { item: LeaderboardEntry; index: number }) => {
-        const isTop5 = index < 5;
-        const isFirst = index === 0;
-        const isSecond = index === 1;
-        const isThird = index === 2;
-
-        const barFraction = maxWins > 0 ? item.total_wins / maxWins : 0;
-        const barWidth = `${Math.max(barFraction * 100, 8)}%` as const;
-
-        const barHeight = isFirst ? 36 : isSecond ? 28 : isThird ? 24 : isTop5 ? 18 : 10;
-        const fontSize = isFirst ? 15 : isSecond ? 14 : isThird ? 13 : isTop5 ? 12 : 11;
-        const imageSize = isFirst ? 52 : isSecond ? 44 : isThird ? 38 : isTop5 ? 32 : 0;
-
-        const barColor = isFirst
-            ? Theme.colors.accent
-            : isSecond
-                ? 'rgba(138,206,0,0.7)'
-                : isThird
-                    ? 'rgba(138,206,0,0.5)'
-                    : isTop5
-                        ? 'rgba(138,206,0,0.3)'
-                        : Theme.colors.buttonBorder;
-
-        return (
-            <TouchableOpacity
-                style={[styles.row, isTop5 && styles.rowTop5]}
-                activeOpacity={0.7}
-                onPress={() => !isTop5 && setPreviewUrl(item.video_url)}
-                disabled={isTop5}
-            >
-                <Text style={[
-                    styles.rank,
-                    isFirst && styles.rankFirst,
-                    isTop5 && !isFirst && styles.rankTop5,
-                ]}>
-                    {item.rank}
-                </Text>
-
-                {isTop5 && <MiniPreview imageUrl={item.video_url} size={imageSize} />}
-
-                <View style={styles.barContainer}>
-                    <View
-                        style={[
-                            styles.bar,
-                            { width: barWidth, height: barHeight, backgroundColor: barColor },
-                        ]}
-                    />
-                    <View style={styles.labelRow}>
-                        <Text
-                            style={[styles.username, { fontSize }]}
-                            numberOfLines={1}
-                        >
-                            @{item.creator_username}
-                        </Text>
-                        <Text style={[styles.wins, { fontSize }]}>
-                            {item.total_wins}
-                        </Text>
-                    </View>
-                </View>
-            </TouchableOpacity>
-        );
-    };
+    }, [tab, fetchData]);
 
     return (
         <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -207,23 +349,20 @@ export default function LeaderboardScreen() {
                 <View style={{ width: 32 }} />
             </View>
 
+            {/* Content */}
             {loading ? (
                 <View style={styles.center}>
                     <ActivityIndicator size="large" color={Theme.colors.textSecondary} />
                 </View>
             ) : entries.length === 0 ? (
                 <View style={styles.center}>
-                    <Text style={styles.emptyText}>No winners yet</Text>
+                    <Text style={styles.emptyText}>
+                        {tab === 'today' ? 'No entries yet today' : tab === 'mine' ? 'You haven\'t posted yet' : 'No entries yet'}
+                    </Text>
                 </View>
             ) : (
-                <FlatList
-                    data={entries}
-                    keyExtractor={(item) => item.id}
-                    renderItem={renderItem}
-                    contentContainerStyle={[
-                        styles.list,
-                        { paddingBottom: insets.bottom + 20 },
-                    ]}
+                <ScrollView
+                    contentContainerStyle={{ paddingBottom: insets.bottom + 60 }}
                     refreshControl={
                         <RefreshControl
                             refreshing={refreshing}
@@ -231,8 +370,20 @@ export default function LeaderboardScreen() {
                             tintColor={Theme.colors.textSecondary}
                         />
                     }
-                />
+                >
+                    <BrickWall
+                        entries={entries}
+                        onSelect={(url) => setPreviewUrl(url)}
+                    />
+                </ScrollView>
             )}
+
+            {/* Bottom tabs */}
+            <View style={[styles.tabBar, { paddingBottom: insets.bottom + 4 }]}>
+                <TabButton label="Today" active={tab === 'today'} onPress={() => setTab('today')} />
+                <TabButton label="All Time" active={tab === 'alltime'} onPress={() => setTab('alltime')} />
+                <TabButton label="Mine" active={tab === 'mine'} onPress={() => setTab('mine')} />
+            </View>
 
             <ImagePreviewModal
                 imageUrl={previewUrl}
@@ -240,6 +391,18 @@ export default function LeaderboardScreen() {
                 onClose={() => setPreviewUrl(null)}
             />
         </View>
+    );
+}
+
+function TabButton({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+    return (
+        <TouchableOpacity
+            onPress={onPress}
+            style={[styles.tab, active && styles.tabActive]}
+            activeOpacity={0.7}
+        >
+            <Text style={[styles.tabText, active && styles.tabTextActive]}>{label}</Text>
+        </TouchableOpacity>
     );
 }
 
@@ -277,58 +440,35 @@ const styles = StyleSheet.create({
         color: Theme.colors.textSecondary,
         fontSize: 15,
     },
-    list: {
-        paddingHorizontal: 16,
+    tabBar: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        bottom: 0,
+        flexDirection: 'row',
+        justifyContent: 'space-around',
+        alignItems: 'center',
+        backgroundColor: Theme.colors.surface,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: Theme.colors.seam,
         paddingTop: 8,
     },
-    row: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginBottom: 4,
+    tab: {
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+        borderRadius: 16,
     },
-    rowTop5: {
-        marginBottom: 10,
+    tabActive: {
+        backgroundColor: Theme.colors.accentMuted,
     },
-    rank: {
-        fontFamily: Theme.fonts.mono,
-        color: Theme.colors.textTertiary,
-        fontSize: 11,
-        width: 28,
-        textAlign: 'right',
-        marginRight: 10,
-        fontVariant: ['tabular-nums'],
-    },
-    rankFirst: {
-        color: Theme.colors.accent,
-        fontSize: 17,
-        fontWeight: '700',
-    },
-    rankTop5: {
-        color: Theme.colors.textSecondary,
-        fontSize: 13,
-        fontWeight: '600',
-    },
-    barContainer: {
-        flex: 1,
-    },
-    bar: {
-        borderRadius: 3,
-    },
-    labelRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        marginTop: 3,
-        paddingRight: 4,
-    },
-    username: {
+    tabText: {
         fontFamily: Theme.fonts.base,
-        color: 'rgba(255,255,255,0.6)',
-        flex: 1,
-        marginRight: 8,
-    },
-    wins: {
-        fontFamily: Theme.fonts.mono,
+        fontSize: 14,
+        fontWeight: '500',
         color: Theme.colors.textTertiary,
-        fontVariant: ['tabular-nums'],
+    },
+    tabTextActive: {
+        color: Theme.colors.textPrimary,
+        fontWeight: '700',
     },
 });

@@ -15,6 +15,7 @@ export type AppUser = {
     display_name: string;
     push_token: string | null;
     lang: 'en' | 'fr';
+    is_admin: boolean;
     achievements: Achievement[];
     created_at: string;
     last_active_at: string;
@@ -53,6 +54,7 @@ export type Card = {
     emoji_tallies: EmojiTallies;
     total_wins: number;
     comment_count: number;
+    caption: string | null;
 };
 
 export type Comment = {
@@ -114,7 +116,7 @@ interface CardsStore {
     returnUnusedCards: (cardIds: string[]) => void;
 
     // --- Creation ---
-    createCard: (videoUrl: string) => Promise<string>;
+    createCard: (videoUrl: string, caption?: string | null) => Promise<string>;
 
     // --- Comments ---
     fetchComments: (postId: string) => Promise<Comment[]>;
@@ -124,7 +126,7 @@ interface CardsStore {
     fetchPostLog: (postId: string) => Promise<LogEntry[]>;
 
     // --- Outbox (user's created cards) ---
-    cachedOutbox: { id: string; video_url: string; emoji_tallies: EmojiTallies; pending_views: number; total_wins: number; created_at: string }[];
+    cachedOutbox: { id: string; video_url: string; emoji_tallies: EmojiTallies; pending_views: number; total_wins: number; created_at: string; caption: string | null }[];
     fetchOutbox: () => Promise<void>;
 
     // --- Heartbeat ---
@@ -331,9 +333,10 @@ export const useStore = create<CardsStore>()(
                 });
             },
 
-            createCard: async (videoUrl) => {
+            createCard: async (videoUrl, caption) => {
                 const { data, error } = await supabase.rpc('create_card', {
                     p_video_url: videoUrl,
+                    p_caption: caption ?? null,
                 });
                 if (error) throw error;
                 return data as string; // post_id UUID
@@ -345,12 +348,12 @@ export const useStore = create<CardsStore>()(
 
                 const { data, error } = await supabase
                     .from('posts')
-                    .select('id, video_url, emoji_tallies, pending_views, total_wins, created_at')
+                    .select('id, video_url, emoji_tallies, pending_views, total_wins, created_at, caption')
                     .eq('sender_id', currentUser.id)
                     .order('created_at', { ascending: false });
 
                 if (error) throw error;
-                set({ cachedOutbox: data || [] });
+                set({ cachedOutbox: (data || []) as any });
             },
 
             // --- Heartbeat ---

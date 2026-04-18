@@ -11,6 +11,18 @@ export default function MainLayout() {
                 }}
             />
             <Stack.Screen
+                name="leaderboard"
+                options={{
+                    animation: 'slide_from_right',
+                }}
+            />
+            <Stack.Screen
+                name="admin"
+                options={{
+                    animation: 'slide_from_right',
+                }}
+            />
+            <Stack.Screen
                 name="settings"
                 options={{
                     presentation: 'transparentModal',

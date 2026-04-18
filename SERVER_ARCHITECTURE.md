@@ -1,13 +1,13 @@
 # Yeet — Server Architecture
 
 > **Source of truth.** If something contradicts this document, this document wins.
-> Last updated: 2026-03-27
+> Last updated: 2026-04-10 (v2.1.0 — Daily Objectives)
 
 ---
 
 ## Overview
 
-Yeet is a head-to-head video duel app. The entire backend runs on **Supabase** (Postgres + Auth + Storage). All mutations go through **RPC functions** (plpgsql, `SECURITY DEFINER`). The client never writes directly to tables except `comments`.
+Yeet is a head-to-head image duel app with a daily photo contest. The entire backend runs on **Supabase** (Postgres + Auth + Storage). All mutations go through **RPC functions** (plpgsql, `SECURITY DEFINER`). The client never writes directly to tables except `comments`.
 
 **Supabase project:** `https://kevfztwwnioouohjmaoy.supabase.co`
 
@@ -23,19 +23,22 @@ Yeet is a head-to-head video duel app. The entire backend runs on **Supabase** (
 | `display_name` | text | | NO | UNIQUE |
 | `lang` | text | | NO | `'en'` or `'fr'` |
 | `push_token` | text | | YES | |
+| `is_admin` | boolean | `false` | NO | **RLS prevents client writes.** Set via Supabase dashboard only. |
 | `achievements` | jsonb | `'[]'` | NO | |
 | `created_at` | timestamptz | `now()` | YES | |
 | `last_active_at` | timestamptz | | YES | Updated by `heartbeat()` |
 
-### `posts` (= videos/cards)
+### `posts` (= cards)
 | Column | Type | Default | Nullable | Notes |
 |--------|------|---------|----------|-------|
 | `id` | uuid | `gen_random_uuid()` | NO | PK |
 | `sender_id` | uuid | | NO | FK to `users.id` |
-| `video_url` | text | | YES | Public URL in `card_videos` bucket |
+| `video_url` | text | | YES | Public URL in `card_videos` bucket (legacy name — stores JPEG image URLs) |
 | `pending_views` | integer | `0` | NO | Fuel. How many times this card can still appear in new matchups |
 | `total_wins` | integer | `0` | NO | Lifetime win count (w). Never decreases |
 | `emoji_tallies` | jsonb | `'{}'` | NO | `{"heart_fire": N, "thinking": N, ...}` |
+| `caption` | text | | YES | Optional text overlay (max 140 chars). Rendered client-side. |
+| `objective_id` | uuid | | YES | FK to `daily_objectives.id`. Legacy — no longer set by client. |
 | `created_at` | timestamptz | `now()` | YES | |
 
 **Indexes:**
@@ -90,6 +93,19 @@ Yeet is a head-to-head video duel app. The entire backend runs on **Supabase** (
 
 Unique on `(emoji, day)`.
 
+### `daily_objectives`
+| Column | Type | Default | Nullable | Notes |
+|--------|------|---------|----------|-------|
+| `id` | uuid | `gen_random_uuid()` | NO | PK |
+| `date` | date | | NO | UNIQUE — one objective per day |
+| `theme_en` | text | | NO | English theme |
+| `theme_fr` | text | | NO | French theme |
+| `winner_post_id` | uuid | | YES | FK to `posts.id`. Set by `compute_daily_winner`. |
+| `winner_user_id` | uuid | | YES | FK to `users.id`. Set by `compute_daily_winner`. |
+| `created_at` | timestamptz | `now()` | NO | |
+
+RLS: SELECT open to all, no client INSERT/UPDATE/DELETE. All writes via admin RPCs.
+
 ### `config` (key-value tuning)
 | Key | Value | Used by |
 |-----|-------|---------|
@@ -102,11 +118,11 @@ Unique on `(emoji, day)`.
 
 ## Storage
 
-**Bucket:** `card_videos` (public read, authenticated write)
+**Bucket:** `card_videos` (public read, authenticated write) — legacy name, stores JPEG images.
 
-URL pattern: `https://kevfztwwnioouohjmaoy.supabase.co/storage/v1/object/public/card_videos/{user_id}/{timestamp}.mp4`
+URL pattern: `https://kevfztwwnioouohjmaoy.supabase.co/storage/v1/object/public/card_videos/{user_id}/{timestamp}.jpg`
 
-Test videos: `card_videos/test/{user_id}/card_XX.mp4`
+Test images: `card_videos/test/{user_id}/card_XX.jpg`
 
 ---
 
@@ -142,9 +158,11 @@ The core distribution mechanic. Every card has a `pending_views` counter — its
 
 ## RPC Functions
 
-### `create_card(p_video_url text) → uuid`
+### `create_card(p_video_url text, p_objective_id uuid DEFAULT NULL, p_caption text DEFAULT NULL) → uuid`
 Creates a new post for the authenticated user.
 - Sets `pending_views = 7`
+- Stores `p_caption` if provided (max 140 chars, enforced client-side)
+- Links to daily objective if `p_objective_id` provided (legacy — client no longer sends this)
 - Returns the new post UUID
 - Does NOT generate any matchups (old `generate_matchups` call removed)
 
@@ -152,14 +170,15 @@ Creates a new post for the authenticated user.
 **Card pool vending machine.** Returns individual cards for the client to assemble into matchups locally.
 
 1. Look up authenticated user
-2. Find `p_count` random cards where:
+2. Look up today's daily objective (if any)
+3. Find `p_count` random cards where:
    - `pending_views > 0` (has fuel)
    - `sender_id != current user` (no self-judging)
    - `video_url IS NOT NULL`
    - `id NOT IN p_exclude_ids` (client passes IDs it already has)
-   - Card not already seen by this user in any prior matchup (checks `matchups` table)
-3. Decrement `pending_views` by 1 for each returned card (fuel cost)
-4. Uses `FOR UPDATE ... SKIP LOCKED` to avoid race conditions on concurrent fetches
+   - **First pass:** scoped to cards created today (UTC `created_at`). **Fallback:** if no cards today, returns any card with fuel.
+4. Decrement `pending_views` by 1 for each returned card (fuel cost)
+5. Uses `FOR UPDATE ... SKIP LOCKED` to avoid race conditions on concurrent fetches
 
 Returns JSON array of card objects:
 ```json
@@ -170,7 +189,8 @@ Returns JSON array of card objects:
   "creator_username": "display_name",
   "emoji_tallies": {},
   "total_wins": 0,
-  "comment_count": 0
+  "comment_count": 0,
+  "caption": "optional text or null"
 }]
 ```
 
@@ -236,6 +256,18 @@ SELECT cron.schedule('expire-stale-matchups', '0 3 * * *', $$SELECT expire_stale
 Returns top cards ranked by `total_wins`. Used by the leaderboard screen.
 
 Returns: `[{ id, video_url, total_wins, pending_views, creator_username, rank }]`
+
+### `get_daily_objective(p_date date DEFAULT CURRENT_DATE) → json`
+Returns today's (or a given date's) objective: `{ id, date, theme_en, theme_fr, winner_post_id, winner_user_id }`. Returns `NULL` if none set.
+
+### `set_daily_objective(p_date date, p_theme_en text, p_theme_fr text) → uuid`
+**Admin-only.** Upserts a daily objective. Checks `is_admin` on the calling user — raises exception if not admin. Returns objective UUID.
+
+### `get_daily_leaderboard(p_date date DEFAULT CURRENT_DATE) → SETOF json`
+Returns today's cards ranked by wins earned today (from matchups judged today for this objective). Each row: `{ post_id, video_url, sender_id, creator_username, wins_today }`.
+
+### `compute_daily_winner(p_date date DEFAULT CURRENT_DATE) → json`
+Finds the card with the most wins earned today. Updates `daily_objectives.winner_post_id` and `winner_user_id`. Returns `{ winner_post_id, winner_user_id, winner_username, winner_image_url, win_count }`. Returns `NULL` if no objective or no matchups.
 
 ### `heartbeat() → void`
 Updates `users.last_active_at` to `now()`.
@@ -311,13 +343,13 @@ App opens with leftover pool from previous session
 
 ### Card creation flow
 ```
-User records video (5s, hold-to-record)
-  → Upload MP4 to card_videos bucket
-  → store.createCard(videoUrl)
-    → RPC create_card(videoUrl)
-      → Insert post with pending_views = 7
+User takes photo (tap-to-shoot)
+  → Upload JPEG to card_videos bucket (legacy name)
+  → store.createCard(imageUrl, objectiveId)
+    → RPC create_card(imageUrl, objectiveId)
+      → Insert post with pending_views = 7, objective_id linked
       → No immediate matchup generation
-    → Video enters the pool, gets picked when ANY user calls fetch_card_pool
+    → Card enters the pool, gets picked when ANY user calls fetch_card_pool
 ```
 
 ### No-rematch model (v1.2.0)
@@ -364,7 +396,8 @@ All tables have RLS enabled. All RPC functions are `SECURITY DEFINER` and bypass
 
 | Table | SELECT | INSERT | UPDATE | DELETE |
 |-------|--------|--------|--------|--------|
-| `users` | All authenticated | Own row (`auth_id = auth.uid()`) | Own row (`auth_id = auth.uid()`) | — |
+| `users` | All authenticated | Own row (`auth_id = auth.uid()`) | Own row, **`is_admin` immutable** (WITH CHECK blocks changes) | — |
+| `daily_objectives` | All authenticated | — (via RPC) | — (via RPC) | — |
 | `posts` | All authenticated | — (via RPC) | — (via RPC) | — |
 | `matchups` | Own only (`viewer_id` = current user) | — (via RPC) | — (via RPC) | — |
 | `comments` | All authenticated | Own (`author_id` = current user) | — | — |
@@ -388,7 +421,7 @@ Everything else (creating cards, judging matchups, generating matchups, backfill
 ## What's NOT in the server
 
 - **Feed / discovery / algorithm** — There is none. Content spreads only through the duel mechanic.
-- **Push notifications for matchups** — Not implemented. Users see matchups when they open the app.
-- **Video transcoding** — Videos are uploaded as-is from the device camera (H.264, varying resolution).
+- **Push notifications** — Not implemented yet. 9am objective and 9pm winner notifications need Supabase Edge Functions + pg_cron + Expo Push API. Tokens already stored in `users.push_token`.
+- **Image resizing** — Images uploaded as-is from the device camera (JPEG). No server-side resizing yet.
 - **Moderation** — None yet.
-- **Daily contest winner announcement** — `compute_daily_tops` writes to `daily_tops` but nothing reads it yet.
+- **Automated winner computation** — `compute_daily_winner` is called on-demand when viewing the winner screen. Should be automated via pg_cron at 9pm Paris time.

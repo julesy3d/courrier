@@ -32,20 +32,6 @@ export default function ProfileScreen() {
                     <Text style={styles.username}>{currentUser?.display_name}</Text>
                 </View>
 
-                <View style={styles.links}>
-                    <TouchableOpacity
-                        style={styles.linkRow}
-                        onPress={() => {
-                            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                            router.push('/(main)/outbox' as any);
-                        }}
-                    >
-                        <Ionicons name="paper-plane-outline" size={24} color={Theme.colors.textPrimary} />
-                        <Text style={styles.linkText}>My Cards</Text>
-                        <Ionicons name="chevron-forward" size={20} color={Theme.colors.textTertiary} style={{ marginLeft: 'auto' }} />
-                    </TouchableOpacity>
-                </View>
-
                 <View style={styles.achievements}>
                     <Text style={styles.sectionTitle}>Achievements</Text>
                     <FlatList
@@ -78,9 +64,6 @@ const styles = StyleSheet.create({
     langText: { fontFamily: Theme.fonts.base, color: Theme.colors.textPrimary, fontWeight: 'bold' },
     profileInfo: { alignItems: 'center', marginVertical: 20 },
     username: { fontFamily: Theme.fonts.base, fontSize: 32, fontWeight: 'bold', color: Theme.colors.textPrimary },
-    links: { paddingHorizontal: 20, marginBottom: 40 },
-    linkRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: Theme.colors.inputBackground },
-    linkText: { fontFamily: Theme.fonts.base, fontSize: 18, color: Theme.colors.textPrimary, marginLeft: 16 },
     achievements: { flex: 1, paddingHorizontal: 20 },
     sectionTitle: { fontFamily: Theme.fonts.base, fontSize: 14, color: Theme.colors.textSecondary, textTransform: 'uppercase', marginBottom: 16 },
     achievementRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
