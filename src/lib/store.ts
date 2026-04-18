@@ -28,52 +28,13 @@ export type Achievement = {
     awarded_at: string;
 };
 
-export type EmojiType = 'heart_fire' | 'thinking' | 'laughing' | 'mindblown';
-
-export type EmojiTallies = {
-    heart_fire?: number;
-    thinking?: number;
-    laughing?: number;
-    mindblown?: number;
-};
-
-export const EMOJI_MAP: EmojiType[] = ['heart_fire', 'thinking', 'laughing', 'mindblown'];
-
-export const EMOJI_DISPLAY: Record<EmojiType, string> = {
-    heart_fire: '\u2764\uFE0F\u200D\uD83D\uDD25',
-    thinking: '🤔',
-    laughing: '😂',
-    mindblown: '🤯',
-};
-
 export type Card = {
     id: string;
     video_url: string;
     sender_id: string;
     creator_username: string;
-    emoji_tallies: EmojiTallies;
     total_wins: number;
-    comment_count: number;
     caption: string | null;
-};
-
-export type Comment = {
-    id: string;
-    post_id: string;
-    author_id: string;
-    body: string;
-    created_at: string;
-    author_name?: string;
-};
-
-export type LogEntry = {
-    id: string;
-    type: 'repost' | 'comment';
-    user_name: string;
-    user_id: string;
-    body?: string;
-    emoji?: EmojiType;
-    created_at: string;
 };
 
 // ═══════════════════════════════════════════════
@@ -105,8 +66,6 @@ interface CardsStore {
         cardAId: string,
         cardBId: string,
         keptCardId: string,
-        emoji: EmojiType | null,
-        streak?: number,
     ) => void;
 
     // --- Pool consumption ---
@@ -117,17 +76,6 @@ interface CardsStore {
 
     // --- Creation ---
     createCard: (videoUrl: string, caption?: string | null) => Promise<string>;
-
-    // --- Comments ---
-    fetchComments: (postId: string) => Promise<Comment[]>;
-    addComment: (postId: string, body: string) => Promise<Comment>;
-
-    // --- Post log ---
-    fetchPostLog: (postId: string) => Promise<LogEntry[]>;
-
-    // --- Outbox (user's created cards) ---
-    cachedOutbox: { id: string; video_url: string; emoji_tallies: EmojiTallies; pending_views: number; total_wins: number; created_at: string; caption: string | null }[];
-    fetchOutbox: () => Promise<void>;
 
     // --- Heartbeat ---
     heartbeat: () => Promise<void>;
@@ -147,7 +95,6 @@ export const useStore = create<CardsStore>()(
             cardPool: [],
             poolExcludeIds: [],
             isPoolFetching: false,
-            cachedOutbox: [],
 
             // --- Auth (unchanged) ---
             signInAnonymously: async () => {
@@ -269,13 +216,11 @@ export const useStore = create<CardsStore>()(
             },
 
             // --- Judgment (fire-and-forget, never blocks UI) ---
-            reportJudgment: (cardAId, cardBId, keptCardId, emoji, streak = 1) => {
+            reportJudgment: (cardAId, cardBId, keptCardId) => {
                 supabase.rpc('report_judgment', {
                     p_card_a_id: cardAId,
                     p_card_b_id: cardBId,
                     p_kept_card_id: keptCardId,
-                    p_emoji: emoji ?? null,
-                    p_streak: streak,
                 }).then(({ error }) => {
                     if (error) console.error('report_judgment RPC error:', error);
                 });
@@ -342,102 +287,10 @@ export const useStore = create<CardsStore>()(
                 return data as string; // post_id UUID
             },
 
-            fetchOutbox: async () => {
-                const { currentUser } = get();
-                if (!currentUser) return;
-
-                const { data, error } = await supabase
-                    .from('posts')
-                    .select('id, video_url, emoji_tallies, pending_views, total_wins, created_at, caption')
-                    .eq('sender_id', currentUser.id)
-                    .order('created_at', { ascending: false });
-
-                if (error) throw error;
-                set({ cachedOutbox: (data || []) as any });
-            },
-
             // --- Heartbeat ---
             heartbeat: async () => {
                 const { error } = await supabase.rpc('heartbeat');
                 if (error) console.error('Heartbeat failed', error);
-            },
-
-            fetchPostLog: async (postId: string) => {
-                const [{ data: reposts }, { data: comments }] = await Promise.all([
-                    supabase
-                        .from('reposts')
-                        .select('id, user_id, emoji, created_at, user:users(display_name)')
-                        .eq('post_id', postId)
-                        .order('created_at', { ascending: true }),
-                    supabase
-                        .from('comments')
-                        .select('id, author_id, body, created_at, author:users(display_name)')
-                        .eq('post_id', postId)
-                        .order('created_at', { ascending: true }),
-                ]);
-
-                const repostEntries = (reposts || []).map((r: any) => ({
-                    id: r.id,
-                    type: 'repost' as const,
-                    user_name: r.user?.display_name || 'Unknown',
-                    user_id: r.user_id,
-                    emoji: r.emoji,
-                    created_at: r.created_at,
-                }));
-
-                const commentEntries = (comments || []).map((c: any) => ({
-                    id: c.id,
-                    type: 'comment' as const,
-                    user_name: c.author?.display_name || 'Unknown',
-                    user_id: c.author_id,
-                    body: c.body,
-                    created_at: c.created_at,
-                }));
-
-                return [...repostEntries, ...commentEntries]
-                    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-            },
-
-            // --- Comments ---
-            fetchComments: async (postId: string) => {
-                const { data, error } = await supabase
-                    .from('comments')
-                    .select('*, author:users(id, display_name)')
-                    .eq('post_id', postId)
-                    .order('created_at', { ascending: true });
-
-                if (error) throw error;
-
-                return (data || []).map((row: any) => ({
-                    id: row.id,
-                    post_id: row.post_id,
-                    author_id: row.author_id,
-                    body: row.body,
-                    created_at: row.created_at,
-                    author_name: row.author?.display_name || 'Unknown',
-                }));
-            },
-
-            addComment: async (postId: string, body: string) => {
-                const { currentUser } = get();
-                if (!currentUser) throw new Error('Not logged in');
-
-                const { data, error } = await supabase
-                    .from('comments')
-                    .insert({
-                        post_id: postId,
-                        author_id: currentUser.id,
-                        body: body.trim(),
-                    })
-                    .select()
-                    .single();
-
-                if (error) throw error;
-
-                return {
-                    ...data,
-                    author_name: currentUser.display_name,
-                } as Comment;
             },
 
         }),
@@ -447,7 +300,6 @@ export const useStore = create<CardsStore>()(
             partialize: (state) => ({
                 cardPool: state.cardPool,
                 poolExcludeIds: state.poolExcludeIds,
-                cachedOutbox: state.cachedOutbox,
             }),
         }
     )

@@ -1,7 +1,7 @@
 # Yeet — Client Architecture
 
 > **Source of truth for the frontend.** If something contradicts this document, this document wins.
-> Last updated: 2026-04-10 (v2.2.0 — Open Submissions + Leaderboard Revamp)
+> Last updated: 2026-04-18 (v2.2.1 — P1 dead-code purge)
 
 ---
 
@@ -41,19 +41,13 @@
 | `src/components/GlassSurface.tsx` | BlurView wrapper. Used by FAB. |
 | `src/app/(main)/leaderboard.tsx` | Leaderboard with 3 tabs (Today / All Time / Mine). Brick wall image layout: #1 full-width hero, #2-3 two-up, #4+ four-up rows. Pull to refresh. Tap image for full-screen preview. |
 | `src/app/onboarding.tsx` | @username input, uniqueness check, camera permission. |
-| `src/app/(main)/profile.tsx` | Links to outbox. |
-| `src/app/(main)/outbox.tsx` | User's created cards with stats. Image thumbnails. (Legacy — "Mine" tab in leaderboard replaces this for most users.) |
+| `src/app/(main)/profile.tsx` | Username, language toggle, achievements list (stub copy — "Achievements coming soon."). |
+| `src/app/(main)/settings.tsx` | Language, account settings. |
 | `src/lib/supabase.ts` | Supabase client init. |
 | `src/lib/notifications.ts` | Push token registration. |
 | `src/lib/i18n.ts` | Locale detection + translation helper. |
 | `src/lib/dictionary.ts` | en/fr string dictionary. |
 | `src/theme.ts` | Semantic design tokens (colors + fonts). Single source of truth for all visual constants. |
-
-### Dead Code (safe to delete)
-
-| File | Reason |
-|------|--------|
-| `src/components/PostLogSheet.tsx` | Exists but not wired to any screen. |
 
 ---
 
@@ -128,14 +122,14 @@ This is the same architecture as the old video prefetch system, using `Image.pre
 
 ### Zustand with AsyncStorage persistence
 
-Persisted keys: `cardPool`, `poolExcludeIds`, `cachedOutbox`
+Persisted keys: `cardPool`, `poolExcludeIds`
 
 Storage key: `'cards-storage'`
 
 ### Key Types
 
 ```typescript
-Card: { id, video_url, sender_id, creator_username, emoji_tallies, total_wins, comment_count, caption }
+Card: { id, video_url, sender_id, creator_username, total_wins, caption }
 ```
 
 Note: `video_url` field name is a legacy artifact — it now contains image URLs.
@@ -161,7 +155,7 @@ AppState → 'active' (resume)
 ### Judgment Flow (Fire-and-Forget)
 
 ```
-reportJudgment(cardAId, cardBId, keptCardId, emoji, streak)
+reportJudgment(cardAId, cardBId, keptCardId)
   → Fire RPC report_judgment(...) — DO NOT AWAIT
   → On error: console.warn (no retry queue yet)
   → The client has already moved to the next matchup
@@ -173,11 +167,10 @@ reportJudgment(cardAId, cardBId, keptCardId, emoji, streak)
 |--------|-------------|------------|
 | `fetchCardPool(count, excludeIds)` | RPC → append cards to pool | No (async, UI shows loading only on first load) |
 | `popChallenger(currentCardIds, excludeSenderIds)` | Pop next card from pool, avoid same-creator if possible | No (instant, synchronous) |
-| `reportJudgment(...)` | Fire-and-forget RPC call | **Never** |
+| `reportJudgment(cardAId, cardBId, keptCardId)` | Fire-and-forget RPC call, 3 params | **Never** |
 | `returnUnusedCards(cardIds)` | Fire-and-forget fuel refund for unplayed pool cards | **Never** |
+| `createCard(videoUrl, caption)` | RPC → insert new post, returns post_id | Yes (awaited during submit flow) |
 | `heartbeat()` | Update `last_active_at` | No |
-| `fetchDailyObjective()` | RPC → set `dailyObjective` state | No (async) |
-| `setDailyObjective(date, en, fr)` | Admin-only RPC → upsert objective | No (async) |
 
 ---
 
@@ -215,21 +208,6 @@ All mutable data read inside `handleYeet` uses refs (not state) to avoid stale c
 </Reanimated.View>
 ```
 
-### Streak Tracking
-
-```typescript
-const streakRef = useRef(0);
-const streakCardRef = useRef<string | null>(null);
-
-// In handleYeet:
-if (keptCardId === streakCardRef.current) {
-    streakRef.current += 1;  // same card won again
-} else {
-    streakRef.current = 1;   // new card, reset
-    streakCardRef.current = keptCardId;
-}
-```
-
 ---
 
 ## Screen Architecture
@@ -244,10 +222,8 @@ src/app/
   (main)/
     _layout.tsx        — Stack navigator
     index.tsx          — Duel screen (MatchupView)
-    profile.tsx        — User profile + admin link (if is_admin)
-    outbox.tsx         — Cards user has created
-    leaderboard.tsx    — Daily leaderboard (6am-9pm) / winner (9pm-6am)
-    admin.tsx          — Admin: set daily objectives
+    profile.tsx        — Username, language toggle, achievements stub
+    leaderboard.tsx    — 3-tab leaderboard (Today / All Time / Mine), all-day
     settings.tsx       — Language, account settings
 ```
 
@@ -322,12 +298,10 @@ Images remain edge-to-edge, `contentFit="cover"`, no border radius.
 
 2. **Images are full camera resolution.** Camera captures at native resolution. `contentFit="cover"` handles display cropping. No server-side resizing yet.
 
-3. **PostLogSheet exists but is not wired** to any screen.
+3. **Pool persistence across sessions.** `cardPool` and `poolExcludeIds` are persisted to AsyncStorage. On cold start, stale cards are returned to the server via `returnUnusedCards`, the pool is cleared, and a fresh batch is fetched.
 
-4. **Pool persistence across sessions.** `cardPool` and `poolExcludeIds` are persisted to AsyncStorage. On cold start, stale cards are returned to the server via `returnUnusedCards`, the pool is cleared, and a fresh batch is fetched.
+4. **`video_url` column name.** The DB column and Card type still use `video_url` — it now stores image URLs. Renaming is a future migration.
 
-5. **`video_url` column name.** The DB column and Card type still use `video_url` — it now stores image URLs. Renaming is a future migration.
+5. **Push notifications not wired.** Daily winner notifications need Supabase Edge Functions + pg_cron + Expo Push API. Tokens already in `users.push_token`.
 
-6. **Push notifications not wired.** 9am objective and 9pm winner notifications need Supabase Edge Functions + pg_cron + Expo Push API. Tokens already in `users.push_token`.
-
-7. **`compute_daily_winner` called on-demand.** Currently triggered when viewing the winner screen. Should be automated via pg_cron at 9pm Paris time.
+6. **Legacy matchups column names.** The DB uses `viewer_id` (the judge) and `killed_card_id` (the yeeted card). These quirks are cosmetic; don't rename without a dedicated migration.

@@ -42,12 +42,14 @@ export default function PhotoCapture({ onComplete, onClose }: PhotoCaptureProps)
     const [permission, requestPermission] = useCameraPermissions();
 
     const cameraRef = useRef<CameraView>(null);
+    const capturingRef = useRef(false);
     const [phase, setPhase] = useState<Phase>('idle');
     const [error, setError] = useState<string | null>(null);
     const [imageUri, setImageUri] = useState<string | null>(null);
     const [facing, setFacing] = useState<CameraType>('front');
     const [caption, setCaption] = useState('');
     const [showCaptionInput, setShowCaptionInput] = useState(false);
+    const [isCameraReady, setIsCameraReady] = useState(false);
 
     if (!permission) return <View style={styles.container} />;
 
@@ -66,7 +68,9 @@ export default function PhotoCapture({ onComplete, onClose }: PhotoCaptureProps)
     }
 
     const takePicture = async () => {
-        if (phase !== 'idle' || !cameraRef.current) return;
+        if (phase !== 'idle' || !cameraRef.current || !isCameraReady) return;
+        if (capturingRef.current) return;
+        capturingRef.current = true;
 
         try {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -79,6 +83,8 @@ export default function PhotoCapture({ onComplete, onClose }: PhotoCaptureProps)
             }
         } catch (e) {
             console.error('Photo capture failed', e);
+        } finally {
+            capturingRef.current = false;
         }
     };
 
@@ -149,6 +155,7 @@ export default function PhotoCapture({ onComplete, onClose }: PhotoCaptureProps)
                         style={StyleSheet.absoluteFill}
                         facing={facing}
                         mode="picture"
+                        onCameraReady={() => setIsCameraReady(true)}
                     />
 
                     {/* Dark overlay with transparent crop-guide hole */}
@@ -226,6 +233,7 @@ export default function PhotoCapture({ onComplete, onClose }: PhotoCaptureProps)
                                 setPhase('idle');
                                 setImageUri(null);
                                 setCaption('');
+                                setIsCameraReady(false);
                             }}>
                                 <Ionicons name="close" size={24} color={Theme.colors.textPrimary} />
                                 <Text style={styles.actionText}>Retake</Text>

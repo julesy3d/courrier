@@ -115,8 +115,6 @@ interface MatchupViewProps {
 export default function MatchupView({ initialCardA, initialCardB, onJudged, onPhaseChange }: MatchupViewProps) {
     const { reportJudgment, popChallenger } = useStore();
     const hasJudgedRef = useRef(false);
-    const streakRef = useRef(0);
-    const streakCardRef = useRef<string | null>(null);
     const [containerHeight, setContainerHeight] = useState(SCREEN_HEIGHT);
 
     // ═══════════════════════════════════════════════════════════════
@@ -193,15 +191,6 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
         // ── Show verdict emojis ──
         showVerdict(keptSlot);
 
-        // ── Streak tracking ──
-        if (keptCardId === streakCardRef.current) {
-            streakRef.current += 1;
-        } else {
-            streakRef.current = 1;
-            streakCardRef.current = keptCardId;
-        }
-        const currentStreak = streakRef.current;
-
         // ── Reset animation values ──
         yeetTranslateY.value = 0;
         yeetTranslateX.value = 0;
@@ -226,8 +215,6 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
             topCardIdRef.current,
             bottomCardIdRef.current,
             keptCardId,
-            null,
-            currentStreak,
         );
 
         // ── Pop next challenger ──

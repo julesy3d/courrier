@@ -5,19 +5,7 @@ export default function MainLayout() {
         <Stack screenOptions={{ headerShown: false }}>
             <Stack.Screen name="index" />
             <Stack.Screen
-                name="outbox"
-                options={{
-                    animation: 'slide_from_right',
-                }}
-            />
-            <Stack.Screen
                 name="leaderboard"
-                options={{
-                    animation: 'slide_from_right',
-                }}
-            />
-            <Stack.Screen
-                name="admin"
                 options={{
                     animation: 'slide_from_right',
                 }}

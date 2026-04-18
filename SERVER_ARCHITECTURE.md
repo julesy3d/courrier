@@ -1,13 +1,13 @@
 # Yeet — Server Architecture
 
 > **Source of truth.** If something contradicts this document, this document wins.
-> Last updated: 2026-04-10 (v2.1.0 — Daily Objectives)
+> Last updated: 2026-04-18 (v2.2.1 — P1 dead-code purge)
 
 ---
 
 ## Overview
 
-Yeet is a head-to-head image duel app with a daily photo contest. The entire backend runs on **Supabase** (Postgres + Auth + Storage). All mutations go through **RPC functions** (plpgsql, `SECURITY DEFINER`). The client never writes directly to tables except `comments`.
+Yeet is a head-to-head image duel app with a daily photo contest. The entire backend runs on **Supabase** (Postgres + Auth + Storage). All mutations go through **RPC functions** (`SECURITY DEFINER`). The client never writes directly to tables — all mutations go through RPCs.
 
 **Supabase project:** `https://kevfztwwnioouohjmaoy.supabase.co`
 
@@ -35,84 +35,46 @@ Yeet is a head-to-head image duel app with a daily photo contest. The entire bac
 | `sender_id` | uuid | | NO | FK to `users.id` |
 | `video_url` | text | | YES | Public URL in `card_videos` bucket (legacy name — stores JPEG image URLs) |
 | `pending_views` | integer | `0` | NO | Fuel. How many times this card can still appear in new matchups |
-| `total_wins` | integer | `0` | NO | Lifetime win count (w). Never decreases |
-| `emoji_tallies` | jsonb | `'{}'` | NO | `{"heart_fire": N, "thinking": N, ...}` |
+| `total_wins` | integer | `0` | NO | Lifetime win count. Never decreases |
+| `emoji_tallies` | jsonb | `'{}'` | NO | Legacy — no longer written by any RPC. Column retained; will drop in a later migration |
 | `caption` | text | | YES | Optional text overlay (max 140 chars). Rendered client-side. |
-| `objective_id` | uuid | | YES | FK to `daily_objectives.id`. Legacy — no longer set by client. |
 | `created_at` | timestamptz | `now()` | YES | |
 
 **Indexes:**
 - `idx_posts_pending_views` on `(pending_views) WHERE pending_views > 0` — fast card selection
 
-**There is no `active_branches` column.** It was removed and replaced by `pending_views`.
-
 ### `matchups`
 | Column | Type | Default | Nullable | Notes |
 |--------|------|---------|----------|-------|
 | `id` | uuid | `gen_random_uuid()` | NO | PK |
-| `card_a_id` | uuid | | NO | FK to `posts.id`. In ladder matchups, this is always the **defender** (surviving card) |
-| `card_b_id` | uuid | | NO | FK to `posts.id`. In ladder matchups, this is always the **challenger** |
-| `viewer_id` | uuid | | NO | FK to `users.id`. Who judges this matchup |
-| `kept_card_id` | uuid | | YES | Set when judged |
-| `killed_card_id` | uuid | | YES | Set when judged |
-| `emoji` | text | | YES | Optional reaction. Currently always `null` in yeet flow |
+| `card_a_id` | uuid | | NO | FK to `posts.id`. One of the two cards the user saw |
+| `card_b_id` | uuid | | NO | FK to `posts.id`. The other card the user saw |
+| `viewer_id` | uuid | | NO | FK to `users.id`. **Legacy name** — this is the judge who swiped. Kept for compatibility. |
+| `kept_card_id` | uuid | | YES | The survivor (winner) |
+| `killed_card_id` | uuid | | YES | **Legacy name** — this is the yeeted (loser) card. Kept for compatibility. |
 | `created_at` | timestamptz | `now()` | NO | |
-| `judged_at` | timestamptz | | YES | `null` = pending, set = judged |
+| `judged_at` | timestamptz | | YES | Set to `now()` when `report_judgment` inserts the row |
 
-**Indexes:**
-- `idx_matchups_viewer_pair` on `(viewer_id, card_a_id, card_b_id)` — fast no-rematch lookup
+**Convention (v2.2.1):** `report_judgment` always writes all columns in one INSERT — there are no unjudged rows. `kept_card_id` is the winner, `killed_card_id` is the loser, `viewer_id` is the judge.
 
-**Convention (v1.2.0):** `card_a` and `card_b` are the two cards the user saw. `kept_card_id` records which one won. Order matches what the client sends to `report_judgment`.
-
-### `comments`
-| Column | Type | Default | Nullable | Notes |
-|--------|------|---------|----------|-------|
-| `id` | uuid | `gen_random_uuid()` | NO | PK |
-| `post_id` | uuid | | NO | FK to `posts.id` |
-| `author_id` | uuid | | NO | FK to `users.id` |
-| `body` | text | | NO | |
-| `created_at` | timestamptz | `now()` | YES | |
-
-### `reposts` (journey log)
-| Column | Type | Default | Nullable | Notes |
-|--------|------|---------|----------|-------|
-| `id` | uuid | `gen_random_uuid()` | NO | PK |
-| `post_id` | uuid | | NO | FK to `posts.id` |
-| `user_id` | uuid | | NO | FK to `users.id` |
-| `emoji` | text | | YES | |
-| `created_at` | timestamptz | `now()` | YES | |
-
-### `daily_tops`
-| Column | Type | Default | Nullable | Notes |
-|--------|------|---------|----------|-------|
-| `id` | uuid | `gen_random_uuid()` | NO | PK |
-| `post_id` | uuid | | NO | |
-| `emoji` | text | | NO | |
-| `day` | date | | NO | |
-| `stamp_count` | integer | | NO | |
-
-Unique on `(emoji, day)`.
-
-### `daily_objectives`
-| Column | Type | Default | Nullable | Notes |
-|--------|------|---------|----------|-------|
-| `id` | uuid | `gen_random_uuid()` | NO | PK |
-| `date` | date | | NO | UNIQUE — one objective per day |
-| `theme_en` | text | | NO | English theme |
-| `theme_fr` | text | | NO | French theme |
-| `winner_post_id` | uuid | | YES | FK to `posts.id`. Set by `compute_daily_winner`. |
-| `winner_user_id` | uuid | | YES | FK to `users.id`. Set by `compute_daily_winner`. |
-| `created_at` | timestamptz | `now()` | NO | |
-
-RLS: SELECT open to all, no client INSERT/UPDATE/DELETE. All writes via admin RPCs.
+**Naming quirk:** The column names `viewer_id` / `killed_card_id` are legacy. Client and server both tolerate them; renaming would require a migration and downtime window.
 
 ### `config` (key-value tuning)
 | Key | Value | Used by |
 |-----|-------|---------|
-| `active_threshold_days` | `7` | **UNUSED** — legacy from `generate_matchups` fan-out |
 | `backfill_count` | `5` | `backfill_new_user_v2` (legacy, may be unused with card pool) |
 | `matchup_fan_out` | `3` | **UNUSED** — legacy from push-based distribution |
 | `min_active_cards_for_matchup` | `2` | **UNUSED** — legacy |
+
+### `daily_tops` (legacy, unscheduled)
+Table still exists; the `compute_daily_tops` cron was unscheduled in the P1 cleanup. Safe to drop in a later migration.
+
+### Dropped in P1 cleanup (2026-04-18)
+- Tables: `daily_objectives`, `comments`, `reposts`
+- Columns: `posts.objective_id`, `matchups.emoji`
+- Functions: `generate_matchups`, `get_kept_history`, `expire_stale_matchups`, `judge_matchup`, `create_card(text)`, `create_card(text, uuid)`
+- Crons: `daily-tops`, `expire-stale-matchups`, `process-letter-delivery`
+- Config rows: `active_threshold_days`, `daily_objective_enabled`, `daily_objective_theme`
 
 ---
 
@@ -131,17 +93,10 @@ Test images: `card_videos/test/{user_id}/card_XX.jpg`
 The core distribution mechanic. Every card has a `pending_views` counter — its "fuel."
 
 ### How fuel enters the system
-- **New video created:** `pending_views = 7` (guaranteed minimum exposure)
-- **Win at streak position k:** `pending_views += ceil((k + 1) / 2)`
+- **New card created:** `pending_views = 7` (guaranteed minimum exposure)
+- **Refund on unjudged:** see "How fuel is recovered" below
 
-| Streak position | Fuel earned | Cumulative after K wins |
-|-----------------|-------------|------------------------|
-| 1st | +1 | 1 |
-| 2nd | +2 | 3 |
-| 3rd | +2 | 5 |
-| 4th | +3 | 8 |
-| 5th | +3 | 11 |
-| 10th | +6 | 33 |
+> Historical: v1.1.0 awarded bonus fuel per streaked win (`+ceil((k+1)/2)`). Removed in P1 cleanup — `report_judgment` no longer mutates `pending_views`. All fuel now comes from the initial 7 and refunds.
 
 ### How fuel leaves the system
 - **Card dealt to a user's pool:** `pending_views -= 1` when `fetch_card_pool` returns it. One card = one fuel spent, regardless of how many matchups it appears in during that session (a winning card can face multiple opponents from the same pool for only 1 fuel).
@@ -158,27 +113,26 @@ The core distribution mechanic. Every card has a `pending_views` counter — its
 
 ## RPC Functions
 
-### `create_card(p_video_url text, p_objective_id uuid DEFAULT NULL, p_caption text DEFAULT NULL) → uuid`
+### `create_card(p_video_url text, p_caption text DEFAULT NULL) → uuid` *(LANGUAGE sql)*
 Creates a new post for the authenticated user.
-- Sets `pending_views = 7`
+- Resolves `sender_id` from `auth.uid()` inline (no separate lookup)
+- Sets `pending_views = 7` (guaranteed minimum exposure)
 - Stores `p_caption` if provided (max 140 chars, enforced client-side)
-- Links to daily objective if `p_objective_id` provided (legacy — client no longer sends this)
 - Returns the new post UUID
-- Does NOT generate any matchups (old `generate_matchups` call removed)
 
-### `fetch_card_pool(p_count integer DEFAULT 10, p_exclude_ids uuid[] DEFAULT '{}') → jsonb` *(v1.2.0)*
+### `fetch_card_pool(p_count integer DEFAULT 10, p_exclude_ids uuid[] DEFAULT '{}') → jsonb` *(LANGUAGE sql)*
 **Card pool vending machine.** Returns individual cards for the client to assemble into matchups locally.
 
-1. Look up authenticated user
-2. Look up today's daily objective (if any)
-3. Find `p_count` random cards where:
+Single CTE-chained query:
+1. `picked` CTE: Find `p_count` cards where:
    - `pending_views > 0` (has fuel)
    - `sender_id != current user` (no self-judging)
    - `video_url IS NOT NULL`
    - `id NOT IN p_exclude_ids` (client passes IDs it already has)
-   - **First pass:** scoped to cards created today (UTC `created_at`). **Fallback:** if no cards today, returns any card with fuel.
-4. Decrement `pending_views` by 1 for each returned card (fuel cost)
-5. Uses `FOR UPDATE ... SKIP LOCKED` to avoid race conditions on concurrent fetches
+   - `ORDER BY (is_today DESC, random())` — today's cards first, older cards fill remaining slots if today is thin
+   - `FOR UPDATE ... SKIP LOCKED` to avoid race conditions
+2. `decremented` CTE: UPDATE `pending_views -= 1` for each picked card (fuel cost)
+3. Final SELECT: JOIN picked ⨝ decremented and build jsonb output
 
 Returns JSON array of card objects:
 ```json
@@ -187,93 +141,55 @@ Returns JSON array of card objects:
   "video_url": "https://...",
   "sender_id": "uuid",
   "creator_username": "display_name",
-  "emoji_tallies": {},
   "total_wins": 0,
-  "comment_count": 0,
   "caption": "optional text or null"
 }]
 ```
 
 Returns `'[]'::jsonb` when no eligible cards exist.
 
-**Why this replaced `sync_matchups` + `generate_matchups_for_user`:** The old system generated matchup *pairs* server-side. The client consumed them one at a time, requiring two sequential RPCs per swipe (judge → sync) before the next card could appear. With `fetch_card_pool`, the client gets a batch of individual cards upfront, sequences matchups locally (winner stays, next challenger from pool), and never waits for the server during gameplay. Judgment is reported asynchronously via `report_judgment`.
+**No matchups-table exclusion.** `fetch_card_pool` does NOT check the `matchups` table. Rematch avoidance is client-side only — the client accumulates seen IDs in `poolExcludeIds` (persisted) and passes them on each call. Cross-session rematches are possible; accepted as rare.
 
-### `report_judgment(p_card_a_id uuid, p_card_b_id uuid, p_kept_card_id uuid, p_emoji text DEFAULT NULL, p_streak integer DEFAULT 1) → jsonb` *(v1.2.0)*
-**Async judgment recorder.** Called fire-and-forget by the client after each yeet.
+### `report_judgment(p_card_a_id uuid, p_card_b_id uuid, p_kept_card_id uuid) → void` *(LANGUAGE sql, v2.2.1)*
+**Async judgment recorder.** Called fire-and-forget by the client after each yeet. Pure bookkeeping — no validation, no scoring side effects, no return value.
 
-**Validations:**
-1. User exists (via `auth.uid()`)
-2. Emoji is valid or null
-3. Kept card is one of the two submitted cards
-4. Neither card belongs to this user (prevents self-voting)
-5. Streak is capped server-side to `LEAST(GREATEST(p_streak, 1), 20)` to prevent abuse
+Single INSERT into `matchups`:
+- `card_a_id`, `card_b_id` = the pair the user saw
+- `viewer_id` = `(SELECT id FROM users WHERE auth_id = auth.uid())` (the judge)
+- `kept_card_id` = winner
+- `killed_card_id` = the other one (derived via CASE)
+- `judged_at` = `now()`
 
-**Actions:**
-1. Insert a matchup row recording the result (`judged_at = now()`) — purely for history/analytics
-2. Winner: `total_wins += 1`
-3. Winner: `pending_views += ceil((capped_streak + 1) / 2.0)` (fuel bonus)
-4. If emoji provided: increment `emoji_tallies[emoji]`
-5. Insert `reposts` row (journey log)
+**What it does NOT do (intentionally removed in P1):**
+- Does not increment `total_wins` on the winner
+- Does not grant streak/fuel bonus
+- Does not write to `reposts` (table dropped)
+- Does not validate self-voting or emoji (client-side only)
+- Does not return a result
 
-**Returns:**
-```json
-{
-  "kept": "uuid",
-  "killed": "uuid",
-  "streak_bonus": 1,
-  "kept_total_wins": 5,
-  "kept_pending_views": 12
-}
-```
+**Score derivation:** `total_wins` is computed on demand by `get_daily_leaderboard` / `get_leaderboard` via `COUNT(*) FROM matchups WHERE kept_card_id = p.id`. The `posts.total_wins` counter column is currently stale for new activity — not used by active queries. Future cleanup: either drop the column or recompute periodically.
 
-**Why this replaced `judge_matchup`:** The old `judge_matchup` validated against a server-created matchup row, then created a ladder matchup for the next round. Both operations put the server on the critical path. `report_judgment` is purely a bookkeeping endpoint — the client doesn't wait for its response. Matchup rows are created only when a result is reported (not upfront), so there are no orphaned unjudged rows.
-
-### `return_unused_cards(p_card_ids uuid[]) → void` *(v1.2.0)*
+### `return_unused_cards(p_card_ids uuid[]) → void`
 **Fuel refund for unplayed cards.** Called fire-and-forget when the client discards stale pool cards (e.g., on app open with a leftover pool from a previous session).
 
 Increments `pending_views` by 1 for each card ID. This reverses the fuel cost from `fetch_card_pool` for cards that were dealt but never shown to the user.
 
-### Legacy RPCs (still deployed, not called by client v1.2.0+)
+### `get_daily_leaderboard(p_date date DEFAULT CURRENT_DATE) → SETOF json`
+Returns today's cards ranked by wins earned today. Joins `posts` with a per-card win count derived from `matchups.kept_card_id` where `judged_at::date = p_date`. No objective coupling.
 
-These functions are still in the database for rollback safety. The client no longer calls them.
-
-- **`generate_matchups_for_user(p_user_id, p_count)`** — was the pull-based pair generator. Replaced by `fetch_card_pool`.
-- **`sync_matchups(p_after)`** — was the main sync endpoint returning pre-paired matchups. Replaced by `fetch_card_pool`.
-- **`judge_matchup(p_matchup_id, p_kept_card_id, p_emoji, p_streak)`** — was the synchronous judgment endpoint that also created ladder matchups. Replaced by `report_judgment`.
-
-### `backfill_new_user_v2(p_user_id uuid) → integer`
-Seeds a new user with matchups from high-scoring cards. Reads `backfill_count` from `config` table (currently 5). Both cards in each matchup spend 1 `pending_views`.
-
-### `expire_stale_matchups() → integer`
-**Cron job.** Finds unjudged matchups older than 24 hours, refunds both cards 1 `pending_views` each, deletes the matchup row. Uses `FOR UPDATE SKIP LOCKED` for safety.
-
-Scheduled daily at 3am UTC via `pg_cron`:
-```sql
-SELECT cron.schedule('expire-stale-matchups', '0 3 * * *', $$SELECT expire_stale_matchups()$$);
-```
+Each row: `{ post_id, video_url, sender_id, creator_username, caption, wins_today }`.
 
 ### `get_leaderboard(p_limit integer DEFAULT 20) → jsonb`
-Returns top cards ranked by `total_wins`. Used by the leaderboard screen.
-
-Returns: `[{ id, video_url, total_wins, pending_views, creator_username, rank }]`
-
-### `get_daily_objective(p_date date DEFAULT CURRENT_DATE) → json`
-Returns today's (or a given date's) objective: `{ id, date, theme_en, theme_fr, winner_post_id, winner_user_id }`. Returns `NULL` if none set.
-
-### `set_daily_objective(p_date date, p_theme_en text, p_theme_fr text) → uuid`
-**Admin-only.** Upserts a daily objective. Checks `is_admin` on the calling user — raises exception if not admin. Returns objective UUID.
-
-### `get_daily_leaderboard(p_date date DEFAULT CURRENT_DATE) → SETOF json`
-Returns today's cards ranked by wins earned today (from matchups judged today for this objective). Each row: `{ post_id, video_url, sender_id, creator_username, wins_today }`.
-
-### `compute_daily_winner(p_date date DEFAULT CURRENT_DATE) → json`
-Finds the card with the most wins earned today. Updates `daily_objectives.winner_post_id` and `winner_user_id`. Returns `{ winner_post_id, winner_user_id, winner_username, winner_image_url, win_count }`. Returns `NULL` if no objective or no matchups.
+Returns top cards ranked by `total_wins`. (Note: `total_wins` is a stale counter column — for accurate current ranking, prefer a query derived from `matchups`. Candidate for rewrite in a future pass.)
 
 ### `heartbeat() → void`
 Updates `users.last_active_at` to `now()`.
 
-### `compute_daily_tops() → void`
-Cron (00:05 UTC). Finds top card per emoji for yesterday. Writes to `daily_tops`.
+### `backfill_new_user_v2(p_user_id uuid) → integer`
+Seeds a new user with initial matchups. Reads `backfill_count` from `config` table (currently 5). Legacy — candidate for removal, as the card-pool architecture doesn't require pre-seeded matchups.
+
+### Possibly still deployed, status uncertain
+These RPCs were documented before the P1 cleanup. They may still exist in the DB, unused. Candidates for verification and drop in a future pass: `compute_daily_winner`, `compute_daily_tops`, `get_daily_objective`, `set_daily_objective`, `generate_matchups_for_user`, `sync_matchups`. (The P1 snapshot query only checked for an explicit drop list; these weren't on it.)
 
 ---
 
@@ -305,24 +221,22 @@ App resumes (from background)
 ### Yeet flow (zero server wait)
 ```
 User swipes (yeet gesture)
-  → Client tracks streak locally (ref counter)
   → Pop next challenger from cardPool (instant, local)
   → Fire yeet animation (500ms)
   → Fire reportJudgment() in background (NEVER awaited)
-    → RPC report_judgment(cardA, cardB, kept, emoji, streak)
-      → Server: record result, score, fuel
-  → Wait for BOTH: animation minimum (200ms) AND video prefetch
-  → Swap dead slot with challenger from pool
+    → RPC report_judgment(cardA, cardB, kept) — 3 params, void return
+      → Server: single INSERT into matchups
+  → Ghost overlay handles the swap visual
   → Winner stays in place, untouched
   → If pool < 5 cards remaining: fetchCardPool(10) in background
 ```
 
 ### Judgment reporting
 ```
-reportJudgment(cardAId, cardBId, keptCardId, emoji, streak)
-  → Fire-and-forget RPC call
+reportJudgment(cardAId, cardBId, keptCardId)
+  → Fire-and-forget RPC call (3 params, no emoji/streak)
   → On failure: logged to console (no retry queue yet)
-  → Server records matchup result (single INSERT with judged_at set)
+  → Server INSERT into matchups with judged_at=now()
   → Does NOT block the next yeet in any way
 ```
 
@@ -334,43 +248,28 @@ App opens with leftover pool from previous session
   → Client clears pool + poolExcludeIds, fetches fresh
 ```
 
-### Streak tracking
-- Client-side only (refs in MatchupView)
-- Incremented when the same card wins consecutively
-- Reset to 1 when: card loses, pool runs out, app backgrounds
-- Passed to `report_judgment` as `p_streak` parameter
-- Server caps the value to `LEAST(GREATEST(p_streak, 1), 20)` — gaming it only inflates distribution (pending_views), not score (total_wins). Low stakes.
-
 ### Card creation flow
 ```
-User takes photo (tap-to-shoot)
+User takes photo (tap-to-shoot) or picks from camera roll
   → Upload JPEG to card_videos bucket (legacy name)
-  → store.createCard(imageUrl, objectiveId)
-    → RPC create_card(imageUrl, objectiveId)
-      → Insert post with pending_views = 7, objective_id linked
+  → store.createCard(imageUrl, caption)
+    → RPC create_card(imageUrl, caption)
+      → Insert post with pending_views = 7, caption stored if provided
       → No immediate matchup generation
     → Card enters the pool, gets picked when ANY user calls fetch_card_pool
 ```
 
-### No-rematch model (v1.2.0)
-- **Cross-session:** `fetch_card_pool` excludes cards that appeared in any prior matchup for this user (checks `matchups` table). Since `report_judgment` now creates matchup rows, seen cards accumulate naturally.
-- **In-session:** Client passes `p_exclude_ids` (all card IDs already in the local pool) to avoid fetching the same card twice in one session.
-- **Same-pair:** Client avoids pairing the same two cards within a session (tracked locally). Cross-session same-pair repeats are possible but rare and acceptable — the user would need to see the same two cards from different fetch batches.
+### No-rematch model
+- **Cross-session:** Client accumulates seen IDs in `poolExcludeIds` (persisted in AsyncStorage). Passed to `fetch_card_pool` as `p_exclude_ids`. **The server does not check the `matchups` table.**
+- **In-session:** Same mechanism — `poolExcludeIds` grows with each fetch.
+- **Stale pool cleanup:** On cold start, `returnUnusedCards(staleIds)` refunds fuel for leftover pool cards, then the pool + excludes clear and a fresh batch is fetched.
+- **Rematch edge case:** Since `poolExcludeIds` clears on cold start, cross-session rematches are possible. Accepted as rare; relying on fuel depletion as the absolute guard.
 
 ---
 
 ## Emoji System
 
-Four emoji reactions available. Currently **not used in the yeet flow** (emoji is always `null`). May be re-introduced in profile/history views.
-
-| Display | DB key | `emoji_tallies` field |
-|---------|--------|----------------------|
-| :heart_fire: | `heart_fire` | `emoji_tallies.heart_fire` |
-| :thinking: | `thinking` | `emoji_tallies.thinking` |
-| :laughing: | `laughing` | `emoji_tallies.laughing` |
-| :mindblown: | `mindblown` | `emoji_tallies.mindblown` |
-
-Validation: `report_judgment` rejects any emoji not in this list.
+Removed in P1. The client no longer sends emoji reactions, and `matchups.emoji` was dropped. `posts.emoji_tallies` column is retained but stale (no writes). Candidate for removal in a future migration.
 
 ---
 
@@ -379,12 +278,11 @@ Validation: `report_judgment` rejects any emoji not in this list.
 These must always hold. If code violates any of these, it's a bug.
 
 1. **A card with `pending_views = 0` is never dealt to a user.** `fetch_card_pool` only picks cards with `pending_views > 0`.
-2. **A user never judges their own card.** `fetch_card_pool` excludes `sender_id = current_user`. `report_judgment` also validates this server-side.
-3. **`total_wins` only increments by 1 per judgment.** The streak bonus only affects `pending_views`, not score.
-4. **`pending_views` never goes below 0.** All decrements use `GREATEST(pending_views - 1, 0)`.
-5. **Streak is capped server-side.** `report_judgment` caps `p_streak` to range `[1, 20]` to prevent abuse.
-6. **The judgment RPC never blocks gameplay.** `report_judgment` is fire-and-forget. The client proceeds regardless of its result.
-7. **Same-creator avoidance is best-effort client-side.** `popChallenger` tries to avoid pairing cards by the same creator, but falls back to any available card if the pool is small.
+2. **A user never judges their own card.** `fetch_card_pool` excludes `sender_id = current_user`. (v2.2.1: `report_judgment` no longer validates this server-side — it trusts the pool filter.)
+3. **`pending_views` never goes below 0.** All decrements use `GREATEST(pending_views - 1, 0)`.
+4. **The judgment RPC never blocks gameplay.** `report_judgment` is fire-and-forget. The client proceeds regardless of its result.
+5. **Same-creator avoidance is best-effort client-side.** `popChallenger` tries to avoid pairing cards by the same creator, but falls back to any available card if the pool is small.
+6. **Winner ranking is derived from matchups, not `posts.total_wins`.** Active leaderboards count `matchups.kept_card_id` rows scoped by date. `posts.total_wins` is a stale legacy counter.
 
 ---
 
@@ -397,31 +295,30 @@ All tables have RLS enabled. All RPC functions are `SECURITY DEFINER` and bypass
 | Table | SELECT | INSERT | UPDATE | DELETE |
 |-------|--------|--------|--------|--------|
 | `users` | All authenticated | Own row (`auth_id = auth.uid()`) | Own row, **`is_admin` immutable** (WITH CHECK blocks changes) | — |
-| `daily_objectives` | All authenticated | — (via RPC) | — (via RPC) | — |
 | `posts` | All authenticated | — (via RPC) | — (via RPC) | — |
 | `matchups` | Own only (`viewer_id` = current user) | — (via RPC) | — (via RPC) | — |
-| `comments` | All authenticated | Own (`author_id` = current user) | — | — |
-| `reposts` | All authenticated | — (via RPC) | — | — |
-| `daily_tops` | All authenticated | — (via RPC) | — | — |
 | `config` | All authenticated | — | — | — |
 
 ### Why these policies exist
 
-The client makes direct table calls in a few places:
+The client makes direct table calls in only a few places:
 - **`users`** — SELECT to load current user by `auth_id`, check username availability; INSERT during onboarding; UPDATE for language change
-- **`posts`** — SELECT to fetch own outbox (`sender_id = currentUser.id`)
-- **`matchups`** — SELECT for history (v1.2.0 no longer queries this from the client during gameplay)
-- **`comments`** — SELECT for post log; INSERT for adding comments
-- **`reposts`** — SELECT with join to `users` for post log
+- **`posts`** — SELECT for leaderboard "Mine" tab (`sender_id = currentUser.id`)
 
-Everything else (creating cards, judging matchups, generating matchups, backfill, leaderboard, heartbeat) goes through `SECURITY DEFINER` RPCs and is unaffected by RLS.
+Everything else (card creation, judging, leaderboard, heartbeat) goes through `SECURITY DEFINER` RPCs and is unaffected by RLS.
+
+**DDL gotcha:** Supabase SQL editor's "run with RLS" prompt mangles plpgsql dollar-quoted function bodies, making them parse as raw SQL. For `CREATE FUNCTION` DDL, always say NO to the RLS prompt — or use `LANGUAGE sql` when the function has no control flow.
 
 ---
 
 ## What's NOT in the server
 
 - **Feed / discovery / algorithm** — There is none. Content spreads only through the duel mechanic.
-- **Push notifications** — Not implemented yet. 9am objective and 9pm winner notifications need Supabase Edge Functions + pg_cron + Expo Push API. Tokens already stored in `users.push_token`.
+- **Social graph** — No follows, friends, DMs, or mentions. See VISION.md and CLAUDE.md — this is a hard product principle, not a missing feature.
+- **Daily objectives / themes** — Removed in v2.2. Users submit whatever they want; the leaderboard ranks all cards created today by win count.
+- **Emoji reactions** — Removed in P1. `matchups.emoji` dropped, client no longer sends.
+- **Comments / reposts** — Removed in P1. Tables dropped.
+- **Push notifications** — Not implemented yet. Daily winner notifications need Supabase Edge Functions + pg_cron + Expo Push API. Tokens already stored in `users.push_token`.
 - **Image resizing** — Images uploaded as-is from the device camera (JPEG). No server-side resizing yet.
 - **Moderation** — None yet.
-- **Automated winner computation** — `compute_daily_winner` is called on-demand when viewing the winner screen. Should be automated via pg_cron at 9pm Paris time.
+- **Automated winner computation** — No current automation. Future: pg_cron at 00:00 UTC to freeze the day's leaderboard.

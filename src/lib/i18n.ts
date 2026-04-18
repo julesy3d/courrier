@@ -71,10 +71,6 @@ const en = {
     'stack.empty': 'Your postcards are out in the world...',
     'stack.unknownSender': 'Unknown sender',
 
-    // Outbox
-    'outbox.title': 'Outbox',
-    'outbox.empty': 'Your postcards will appear here',
-
     // Settings
     'settings.title': 'Settings',
     'settings.name': 'Name',
@@ -171,10 +167,6 @@ const fr = {
     // Main Stack
     'stack.empty': 'Tes cartes postales parcourent le monde...',
     'stack.unknownSender': 'Expéditeur inconnu',
-
-    // Outbox
-    'outbox.title': 'Envois',
-    'outbox.empty': 'Vos cartes postales apparaîtront ici',
 
     // Settings
     'settings.title': 'Réglages',

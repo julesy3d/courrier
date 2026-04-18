@@ -4,7 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { useStore, EMOJI_MAP } from '../../lib/store';
+import { useStore } from '../../lib/store';
 import { Theme } from '../../theme';
 
 export default function ProfileScreen() {
@@ -39,7 +39,7 @@ export default function ProfileScreen() {
                         keyExtractor={(item, index) => `${item.type}-${index}`}
                         renderItem={({ item }) => (
                             <View style={styles.achievementRow}>
-                                <Text style={styles.achievementEmoji}>{item.emoji ? (EMOJI_MAP as any)[item.emoji] || '🏆' : '🏆'}</Text>
+                                <Text style={styles.achievementEmoji}>🏆</Text>
                                 <View>
                                     <Text style={styles.achievementType}>{item.type}</Text>
                                     <Text style={styles.achievementDate}>{new Date(item.awarded_at).toLocaleDateString()}</Text>
@@ -47,7 +47,7 @@ export default function ProfileScreen() {
                             </View>
                         )}
                         ListEmptyComponent={
-                            <Text style={styles.emptyText}>No achievements yet.</Text>
+                            <Text style={styles.emptyText}>Achievements coming soon.</Text>
                         }
                     />
                 </View>
