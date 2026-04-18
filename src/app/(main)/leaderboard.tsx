@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
     View,
     Text,
@@ -9,19 +9,21 @@ import {
     RefreshControl,
     Modal,
     Dimensions,
+    FlatList,
+    NativeSyntheticEvent,
+    NativeScrollEvent,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { supabase } from '../../lib/supabase';
 import { useStore } from '../../lib/store';
 import { Theme } from '../../theme';
+import TabBar, { TAB_BAR_HEIGHT } from '../../components/TabBar';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const CARD_GAP = 3;
 
 type Tab = 'today' | 'alltime' | 'mine';
+const TABS: Tab[] = ['today', 'alltime', 'mine'];
 
 type LeaderboardEntry = {
     post_id: string;
@@ -158,7 +160,7 @@ const brickStyles = StyleSheet.create({
     },
 });
 
-// ─── Brick wall layout ───
+// ─── Brick wall layout (flush, no gaps) ───
 function BrickWall({ entries, onSelect }: {
     entries: LeaderboardEntry[];
     onSelect: (url: string) => void;
@@ -166,20 +168,15 @@ function BrickWall({ entries, onSelect }: {
     if (entries.length === 0) return null;
 
     const fullWidth = SCREEN_WIDTH;
-
-    // #1: full-width hero
     const heroHeight = fullWidth * 0.75;
-    // #2-3: two-up
-    const twoUpWidth = (fullWidth - CARD_GAP) / 2;
+    const twoUpWidth = fullWidth / 2;
     const twoUpHeight = twoUpWidth * 1.1;
-    // #4+: four-up
-    const fourUpWidth = (fullWidth - CARD_GAP * 3) / 4;
+    const fourUpWidth = fullWidth / 4;
     const fourUpHeight = fourUpWidth * 1.2;
 
     const rows: React.ReactNode[] = [];
     let idx = 0;
 
-    // Row 1: hero (#1)
     if (idx < entries.length) {
         const heroEntry = entries[idx];
         rows.push(
@@ -195,7 +192,6 @@ function BrickWall({ entries, onSelect }: {
         idx++;
     }
 
-    // Row 2: two-up (#2, #3)
     if (idx < entries.length) {
         const row: React.ReactNode[] = [];
         const rowStart = idx;
@@ -214,13 +210,12 @@ function BrickWall({ entries, onSelect }: {
             idx++;
         }
         rows.push(
-            <View key={`row-2up`} style={[wallStyles.row, { gap: CARD_GAP }]}>
+            <View key={`row-2up`} style={wallStyles.row}>
                 {row}
             </View>
         );
     }
 
-    // Remaining: four-up rows
     let rowNum = 0;
     while (idx < entries.length) {
         const row: React.ReactNode[] = [];
@@ -240,14 +235,14 @@ function BrickWall({ entries, onSelect }: {
             idx++;
         }
         rows.push(
-            <View key={`row-4up-${rowNum}`} style={[wallStyles.row, { gap: CARD_GAP }]}>
+            <View key={`row-4up-${rowNum}`} style={wallStyles.row}>
                 {row}
             </View>
         );
         rowNum++;
     }
 
-    return <View style={{ gap: CARD_GAP }}>{rows}</View>;
+    return <View>{rows}</View>;
 }
 
 const wallStyles = StyleSheet.create({
@@ -261,129 +256,176 @@ const wallStyles = StyleSheet.create({
 // ═══════════════════════════════════════════════
 
 export default function LeaderboardScreen() {
-    const router = useRouter();
     const insets = useSafeAreaInsets();
     const { currentUser } = useStore();
+    const bottomReserved = TAB_BAR_HEIGHT + insets.bottom;
 
-    const [tab, setTab] = useState<Tab>('today');
-    const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [refreshing, setRefreshing] = useState(false);
+    const [tabIndex, setTabIndex] = useState(0);
+    const [entriesByTab, setEntriesByTab] = useState<Record<Tab, LeaderboardEntry[]>>({
+        today: [], alltime: [], mine: [],
+    });
+    const [loadingByTab, setLoadingByTab] = useState<Record<Tab, boolean>>({
+        today: true, alltime: true, mine: true,
+    });
+    const [refreshingTab, setRefreshingTab] = useState<Tab | null>(null);
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
-    const fetchData = useCallback(async (activeTab: Tab) => {
-        try {
-            if (activeTab === 'today') {
-                const { data, error } = await supabase.rpc('get_daily_leaderboard', {
-                    p_date: new Date().toISOString().split('T')[0],
-                });
-                if (error) throw error;
-                setEntries(((data || []) as any[]).map(d => ({
-                    post_id: d.post_id,
-                    video_url: d.video_url,
-                    sender_id: d.sender_id,
-                    creator_username: d.creator_username,
-                    wins: d.wins_today,
-                    caption: d.caption ?? null,
-                })));
-            } else if (activeTab === 'alltime') {
-                const { data, error } = await supabase.rpc('get_leaderboard', {
-                    p_limit: 50,
-                });
-                if (error) throw error;
-                setEntries(((data || []) as any[]).map(d => ({
-                    post_id: d.id,
-                    video_url: d.video_url,
-                    sender_id: '',
-                    creator_username: d.creator_username,
-                    wins: d.total_wins,
-                    caption: d.caption ?? null,
-                })));
-            } else {
-                // Mine: current user's cards ranked by total_wins
-                if (!currentUser) { setEntries([]); return; }
-                const { data, error } = await supabase
-                    .from('posts')
-                    .select('id, video_url, total_wins, sender_id, caption')
-                    .eq('sender_id', currentUser.id)
-                    .order('total_wins', { ascending: false })
-                    .limit(50);
-                if (error) throw error;
-                setEntries(((data || []) as any[]).map(d => ({
-                    post_id: d.id,
-                    video_url: d.video_url,
-                    sender_id: d.sender_id,
-                    creator_username: currentUser.display_name,
-                    wins: d.total_wins,
-                    caption: d.caption ?? null,
-                })));
-            }
-        } catch (e) {
-            console.error('Leaderboard fetch error:', e);
+    const pagerRef = useRef<FlatList<Tab>>(null);
+
+    const fetchTab = useCallback(async (t: Tab): Promise<LeaderboardEntry[]> => {
+        if (t === 'today') {
+            const { data, error } = await supabase.rpc('get_daily_leaderboard', {
+                p_date: new Date().toISOString().split('T')[0],
+            });
+            if (error) throw error;
+            return ((data || []) as any[]).map(d => ({
+                post_id: d.post_id,
+                video_url: d.video_url,
+                sender_id: d.sender_id,
+                creator_username: d.creator_username,
+                wins: d.wins_today,
+                caption: d.caption ?? null,
+            }));
         }
+        if (t === 'alltime') {
+            const { data, error } = await supabase.rpc('get_leaderboard', { p_limit: 50 });
+            if (error) throw error;
+            return ((data || []) as any[]).map(d => ({
+                post_id: d.id,
+                video_url: d.video_url,
+                sender_id: '',
+                creator_username: d.creator_username,
+                wins: d.total_wins,
+                caption: d.caption ?? null,
+            }));
+        }
+        if (!currentUser) return [];
+        const { data, error } = await supabase
+            .from('posts')
+            .select('id, video_url, total_wins, sender_id, caption')
+            .eq('sender_id', currentUser.id)
+            .order('total_wins', { ascending: false })
+            .limit(50);
+        if (error) throw error;
+        return ((data || []) as any[]).map(d => ({
+            post_id: d.id,
+            video_url: d.video_url,
+            sender_id: d.sender_id,
+            creator_username: currentUser.display_name,
+            wins: d.total_wins,
+            caption: d.caption ?? null,
+        }));
     }, [currentUser]);
 
-    useEffect(() => {
-        setLoading(true);
-        fetchData(tab).finally(() => setLoading(false));
-    }, [tab]);
+    const loadTab = useCallback(async (t: Tab) => {
+        try {
+            const entries = await fetchTab(t);
+            setEntriesByTab(prev => ({ ...prev, [t]: entries }));
+        } catch (e) {
+            console.error('Leaderboard fetch error:', e);
+        } finally {
+            setLoadingByTab(prev => ({ ...prev, [t]: false }));
+        }
+    }, [fetchTab]);
 
-    const onRefresh = useCallback(async () => {
-        setRefreshing(true);
-        await fetchData(tab);
-        setRefreshing(false);
-    }, [tab, fetchData]);
+    useEffect(() => {
+        // Prefetch all three so swiping feels instant
+        TABS.forEach(loadTab);
+    }, [loadTab]);
+
+    const goTab = (i: number) => {
+        setTabIndex(i);
+        pagerRef.current?.scrollToIndex({ index: i, animated: true });
+    };
+
+    const onMomentumScrollEnd = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+        const i = Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH);
+        if (i !== tabIndex) setTabIndex(i);
+    };
+
+    const onRefresh = useCallback(async (t: Tab) => {
+        setRefreshingTab(t);
+        try {
+            const entries = await fetchTab(t);
+            setEntriesByTab(prev => ({ ...prev, [t]: entries }));
+        } catch (e) {
+            console.error('Leaderboard refresh error:', e);
+        } finally {
+            setRefreshingTab(null);
+        }
+    }, [fetchTab]);
+
+    const renderPage = ({ item: t }: { item: Tab }) => {
+        const entries = entriesByTab[t];
+        const loading = loadingByTab[t];
+
+        if (loading) {
+            return (
+                <View style={[styles.page, styles.center]}>
+                    <ActivityIndicator size="large" color={Theme.colors.textSecondary} />
+                </View>
+            );
+        }
+        if (entries.length === 0) {
+            return (
+                <View style={[styles.page, styles.center]}>
+                    <Text style={styles.emptyText}>
+                        {t === 'today' ? 'No entries yet today' : t === 'mine' ? 'You haven\'t posted yet' : 'No entries yet'}
+                    </Text>
+                </View>
+            );
+        }
+        return (
+            <ScrollView
+                style={styles.page}
+                contentContainerStyle={{ paddingBottom: bottomReserved + 24 }}
+                refreshControl={
+                    <RefreshControl
+                        refreshing={refreshingTab === t}
+                        onRefresh={() => onRefresh(t)}
+                        tintColor={Theme.colors.textSecondary}
+                    />
+                }
+            >
+                <BrickWall
+                    entries={entries}
+                    onSelect={(url) => setPreviewUrl(url)}
+                />
+            </ScrollView>
+        );
+    };
 
     return (
         <View style={[styles.container, { paddingTop: insets.top }]}>
-            {/* Header */}
             <View style={styles.header}>
-                <TouchableOpacity
-                    onPress={() => router.back()}
-                    style={styles.backButton}
-                    hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                >
-                    <Ionicons name="chevron-back" size={22} color={Theme.colors.textPrimary} />
-                </TouchableOpacity>
                 <Text style={styles.title}>Leaderboard</Text>
-                <View style={{ width: 32 }} />
             </View>
 
-            {/* Content */}
-            {loading ? (
-                <View style={styles.center}>
-                    <ActivityIndicator size="large" color={Theme.colors.textSecondary} />
-                </View>
-            ) : entries.length === 0 ? (
-                <View style={styles.center}>
-                    <Text style={styles.emptyText}>
-                        {tab === 'today' ? 'No entries yet today' : tab === 'mine' ? 'You haven\'t posted yet' : 'No entries yet'}
-                    </Text>
-                </View>
-            ) : (
-                <ScrollView
-                    contentContainerStyle={{ paddingBottom: insets.bottom + 60 }}
-                    refreshControl={
-                        <RefreshControl
-                            refreshing={refreshing}
-                            onRefresh={onRefresh}
-                            tintColor={Theme.colors.textSecondary}
-                        />
-                    }
-                >
-                    <BrickWall
-                        entries={entries}
-                        onSelect={(url) => setPreviewUrl(url)}
-                    />
-                </ScrollView>
-            )}
-
-            {/* Bottom tabs */}
-            <View style={[styles.tabBar, { paddingBottom: insets.bottom + 4 }]}>
-                <TabButton label="Today" active={tab === 'today'} onPress={() => setTab('today')} />
-                <TabButton label="All Time" active={tab === 'alltime'} onPress={() => setTab('alltime')} />
-                <TabButton label="Mine" active={tab === 'mine'} onPress={() => setTab('mine')} />
+            <View style={styles.filterRow}>
+                <TabButton label="Today" active={tabIndex === 0} onPress={() => goTab(0)} />
+                <TabButton label="All Time" active={tabIndex === 1} onPress={() => goTab(1)} />
+                <TabButton label="Mine" active={tabIndex === 2} onPress={() => goTab(2)} />
             </View>
+
+            <FlatList
+                ref={pagerRef}
+                data={TABS}
+                keyExtractor={(t) => t}
+                renderItem={renderPage}
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                onMomentumScrollEnd={onMomentumScrollEnd}
+                getItemLayout={(_, index) => ({
+                    length: SCREEN_WIDTH,
+                    offset: SCREEN_WIDTH * index,
+                    index,
+                })}
+                initialNumToRender={3}
+                windowSize={3}
+            />
+
+            <TabBar />
 
             <ImagePreviewModal
                 imageUrl={previewUrl}
@@ -414,21 +456,26 @@ const styles = StyleSheet.create({
     header: {
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-between',
+        justifyContent: 'center',
         paddingHorizontal: 16,
         paddingVertical: 12,
-    },
-    backButton: {
-        width: 32,
-        height: 32,
-        justifyContent: 'center',
-        alignItems: 'center',
     },
     title: {
         fontFamily: Theme.fonts.base,
         color: Theme.colors.textPrimary,
         fontSize: 17,
         fontWeight: '600',
+    },
+    filterRow: {
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
+        gap: 8,
+        paddingHorizontal: 16,
+        paddingBottom: 12,
+    },
+    page: {
+        width: SCREEN_WIDTH,
     },
     center: {
         flex: 1,
@@ -439,19 +486,6 @@ const styles = StyleSheet.create({
         fontFamily: Theme.fonts.base,
         color: Theme.colors.textSecondary,
         fontSize: 15,
-    },
-    tabBar: {
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        bottom: 0,
-        flexDirection: 'row',
-        justifyContent: 'space-around',
-        alignItems: 'center',
-        backgroundColor: Theme.colors.surface,
-        borderTopWidth: StyleSheet.hairlineWidth,
-        borderTopColor: Theme.colors.seam,
-        paddingTop: 8,
     },
     tab: {
         paddingHorizontal: 16,

@@ -287,18 +287,10 @@ export default function PhotoCapture({ onComplete, onClose }: PhotoCaptureProps)
                         <Ionicons name="close" size={28} color={Theme.colors.textPrimary} />
                     </TouchableOpacity>
 
-                    {/* Flip camera toggle */}
-                    <TouchableOpacity
-                        style={[styles.flipButton, { top: insets.top + 12 }]}
-                        onPress={() => setFacing(f => f === 'front' ? 'back' : 'front')}
-                    >
-                        <Ionicons name="camera-reverse-outline" size={24} color={Theme.colors.textPrimary} />
-                    </TouchableOpacity>
-
                     <View style={[styles.shutterHost, { bottom: insets.bottom + 40 }]}>
                         {/* Gallery picker */}
                         <TouchableOpacity
-                            style={styles.galleryButton}
+                            style={styles.sideControl}
                             onPress={pickFromLibrary}
                         >
                             <Ionicons name="images-outline" size={28} color={Theme.colors.textPrimary} />
@@ -313,8 +305,13 @@ export default function PhotoCapture({ onComplete, onClose }: PhotoCaptureProps)
                             <View style={styles.shutterInner} />
                         </TouchableOpacity>
 
-                        {/* Spacer to balance the row */}
-                        <View style={{ width: 48 }} />
+                        {/* Flip camera toggle */}
+                        <TouchableOpacity
+                            style={styles.sideControl}
+                            onPress={() => setFacing(f => f === 'front' ? 'back' : 'front')}
+                        >
+                            <Ionicons name="camera-reverse-outline" size={28} color={Theme.colors.textPrimary} />
+                        </TouchableOpacity>
                     </View>
                 </>
             )}
@@ -361,18 +358,6 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         zIndex: 10,
     },
-    flipButton: {
-        position: 'absolute',
-        right: 20,
-        width: 44,
-        height: 44,
-        borderRadius: 22,
-        backgroundColor: Theme.colors.buttonBackground,
-        justifyContent: 'center',
-        alignItems: 'center',
-        zIndex: 10,
-    },
-
     // Crop overlay
     overlayHost: {
         ...StyleSheet.absoluteFillObject,
@@ -429,7 +414,7 @@ const styles = StyleSheet.create({
         borderRadius: 32,
         backgroundColor: Theme.colors.textPrimary,
     },
-    galleryButton: {
+    sideControl: {
         width: 48,
         height: 48,
         borderRadius: 24,

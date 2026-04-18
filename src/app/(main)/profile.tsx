@@ -1,15 +1,15 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, FlatList } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import { useStore } from '../../lib/store';
+import TabBar, { TAB_BAR_HEIGHT } from '../../components/TabBar';
 import { Theme } from '../../theme';
 
 export default function ProfileScreen() {
     const { currentUser, updateLanguage } = useStore();
-    const router = useRouter();
+    const insets = useSafeAreaInsets();
+    const bottomReserved = TAB_BAR_HEIGHT + insets.bottom;
 
     const toggleLanguage = () => {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -20,9 +20,7 @@ export default function ProfileScreen() {
         <View style={styles.container}>
             <SafeAreaView style={{ flex: 1 }} edges={['top']}>
                 <View style={styles.header}>
-                    <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-                        <Ionicons name="chevron-back" size={28} color={Theme.colors.textPrimary} />
-                    </TouchableOpacity>
+                    <View style={{ width: 32 }} />
                     <TouchableOpacity onPress={toggleLanguage} style={styles.langButton}>
                         <Text style={styles.langText}>{currentUser?.lang.toUpperCase()}</Text>
                     </TouchableOpacity>
@@ -37,6 +35,7 @@ export default function ProfileScreen() {
                     <FlatList
                         data={currentUser?.achievements || []}
                         keyExtractor={(item, index) => `${item.type}-${index}`}
+                        contentContainerStyle={{ paddingBottom: bottomReserved + 24 }}
                         renderItem={({ item }) => (
                             <View style={styles.achievementRow}>
                                 <Text style={styles.achievementEmoji}>🏆</Text>
@@ -52,6 +51,8 @@ export default function ProfileScreen() {
                     />
                 </View>
             </SafeAreaView>
+
+            <TabBar />
         </View>
     );
 }
@@ -59,7 +60,6 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: Theme.colors.background },
     header: { flexDirection: 'row', justifyContent: 'space-between', padding: 20 },
-    backButton: { padding: 4 },
     langButton: { padding: 8, backgroundColor: Theme.colors.inputBackground, borderRadius: 12 },
     langText: { fontFamily: Theme.fonts.base, color: Theme.colors.textPrimary, fontWeight: 'bold' },
     profileInfo: { alignItems: 'center', marginVertical: 20 },

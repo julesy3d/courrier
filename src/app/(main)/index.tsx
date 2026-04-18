@@ -1,47 +1,68 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, AppState, ActivityIndicator } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, StyleSheet, AppState, ActivityIndicator } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
 import { Card, useStore } from '../../lib/store';
 import MatchupView from '../../components/MatchupView';
 import EmptyState from '../../components/EmptyState';
-import PhotoCapture from '../../components/PhotoCapture';
-import GlassSurface from '../../components/GlassSurface';
+import TabBar, { TAB_BAR_HEIGHT } from '../../components/TabBar';
 import { Theme } from '../../theme';
 
+// Module-level: survives component unmount/remount across tab switches
+// within a single app session. Resets on app kill (true cold start).
+let hasHandledColdStart = false;
+let activeMatchup: { a: Card; b: Card } | null = null;
+
 export default function MainScreen() {
-    const { currentUser, cardPool, fetchCardPool, heartbeat, returnUnusedCards } = useStore();
-    const router = useRouter();
+    const { cardPool, fetchCardPool, heartbeat, returnUnusedCards } = useStore();
     const insets = useSafeAreaInsets();
 
-    const [isLoading, setIsLoading] = useState(true);
-    const [showCamera, setShowCamera] = useState(false);
-    const [initialCards, setInitialCards] = useState<{ a: Card; b: Card } | null>(null);
+    // Lazy init from module-level matchup so warm mounts render instantly
+    // with no spinner → EmptyState flash
+    const [isLoading, setIsLoading] = useState(() => !activeMatchup);
+    const [initialCards, setInitialCards] = useState<{ a: Card; b: Card } | null>(() => activeMatchup);
 
     const initPool = async () => {
         try {
-            await heartbeat();
+            if (!hasHandledColdStart) {
+                await heartbeat();
 
-            // Return fuel for stale cards from a previous session, then start fresh
-            const stalePool = useStore.getState().cardPool;
-            if (stalePool.length > 0) {
-                returnUnusedCards(stalePool.map(c => c.id));
+                // Return fuel for stale cards from a previous session, then start fresh
+                const stalePool = useStore.getState().cardPool;
+                if (stalePool.length > 0) {
+                    returnUnusedCards(stalePool.map(c => c.id));
+                }
+                useStore.setState({ cardPool: [], poolExcludeIds: [], isPoolFetching: false });
+
+                await fetchCardPool(10);
+                hasHandledColdStart = true;
+            } else if (activeMatchup) {
+                // Already rendering persisted matchup; opportunistic top-up only
+                const pool = useStore.getState().cardPool;
+                if (pool.length < 5) {
+                    fetchCardPool(10).catch(console.error);
+                }
+                return;
+            } else {
+                // Warm mount, no persisted matchup — ensure pool has enough
+                const pool = useStore.getState().cardPool;
+                if (pool.length < 2) {
+                    await fetchCardPool(10);
+                }
             }
-            // Reset pool state + clear any stuck fetch lock
-            useStore.setState({ cardPool: [], poolExcludeIds: [], isPoolFetching: false });
 
-            await fetchCardPool(10);
-
-            // Wait for the first 2 images to be cached before displaying.
+            // Pop two cards, prefetch, then set initialCards atomically with isLoading=false
             const pool = useStore.getState().cardPool;
             if (pool.length >= 2) {
+                const a = pool[0];
+                const b = pool[1];
                 await Promise.all([
-                    Image.prefetch(pool[0].video_url),
-                    Image.prefetch(pool[1].video_url),
+                    Image.prefetch(a.video_url),
+                    Image.prefetch(b.video_url),
                 ]);
+                useStore.setState({ cardPool: pool.slice(2) });
+                activeMatchup = { a, b };
+                setInitialCards({ a, b });
             }
         } catch (e) {
             console.error(e);
@@ -49,17 +70,6 @@ export default function MainScreen() {
             setIsLoading(false);
         }
     };
-
-    // Pop first two cards for display once pool is ready
-    useEffect(() => {
-        const pool = useStore.getState().cardPool;
-        if (!isLoading && pool.length >= 2 && !initialCards) {
-            const a = pool[0];
-            const b = pool[1];
-            useStore.setState({ cardPool: pool.slice(2) });
-            setInitialCards({ a, b });
-        }
-    }, [isLoading, cardPool.length]);
 
     useEffect(() => {
         initPool();
@@ -76,6 +86,7 @@ export default function MainScreen() {
 
     const handleJudged = () => {
         // Pool ran out during play — try to refill and restart
+        activeMatchup = null;
         setInitialCards(null);
         setIsLoading(true);
         fetchCardPool(10).then(async () => {
@@ -85,6 +96,7 @@ export default function MainScreen() {
                     Image.prefetch(pool[0].video_url),
                     Image.prefetch(pool[1].video_url),
                 ]);
+                activeMatchup = { a: pool[0], b: pool[1] };
                 setInitialCards({ a: pool[0], b: pool[1] });
                 useStore.setState({ cardPool: pool.slice(2) });
             }
@@ -92,44 +104,16 @@ export default function MainScreen() {
         }).catch(() => setIsLoading(false));
     };
 
-    const handleVideoCreated = () => {
-        setShowCamera(false);
-        const pool = useStore.getState().cardPool;
-        if (pool.length < 5) {
-            fetchCardPool(10).catch(console.error);
-        }
-    };
+    const tabBarReservedHeight = TAB_BAR_HEIGHT + insets.bottom;
 
     return (
         <View style={styles.container}>
-            {/* Floating avatar — top left */}
-            {!showCamera && (
-                <TouchableOpacity
-                    onPress={() => {
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                        router.push('/(main)/profile' as any);
-                    }}
-                    style={[styles.avatarButton, { top: insets.top + 8 }]}
-                >
-                    <Ionicons name="person-outline" size={18} color={Theme.colors.textPrimary} />
-                </TouchableOpacity>
-            )}
-
-            {/* Floating leaderboard — top right */}
-            {!showCamera && (
-                <TouchableOpacity
-                    onPress={() => {
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                        router.push('/(main)/leaderboard' as any);
-                    }}
-                    style={[styles.leaderboardButton, { top: insets.top + 8 }]}
-                >
-                    <Text style={styles.leaderboardIcon}>🏆</Text>
-                </TouchableOpacity>
-            )}
-
-            {/* Content area — full screen */}
-            <View style={styles.content}>
+            <View
+                style={[
+                    styles.content,
+                    { marginBottom: tabBarReservedHeight },
+                ]}
+            >
                 {isLoading && !initialCards ? (
                     <View style={styles.center}>
                         <ActivityIndicator size="large" color={Theme.colors.textSecondary} />
@@ -139,39 +123,14 @@ export default function MainScreen() {
                         initialCardA={initialCards.a}
                         initialCardB={initialCards.b}
                         onJudged={handleJudged}
+                        onMatchupChanged={(a, b) => { activeMatchup = { a, b }; }}
                     />
                 ) : (
                     <EmptyState />
                 )}
             </View>
 
-            {/* FAB — always visible */}
-            {!showCamera && (
-                <TouchableOpacity
-                    activeOpacity={0.85}
-                    onPress={() => {
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                        setShowCamera(true);
-                    }}
-                    style={[styles.fab, { bottom: insets.bottom + 12 }]}
-                >
-                    <GlassSurface style={styles.fabGlass} intensity={50} tint="default">
-                        <Ionicons name="add" size={30} color={Theme.colors.textPrimary} />
-                    </GlassSurface>
-                </TouchableOpacity>
-            )}
-
-            {/* Camera Overlay */}
-            {showCamera && (
-                <View style={StyleSheet.absoluteFill}>
-                    <PhotoCapture
-                        onComplete={handleVideoCreated}
-                        onClose={() => {
-                            setShowCamera(false);
-                        }}
-                    />
-                </View>
-            )}
+            <TabBar />
         </View>
     );
 }
@@ -183,54 +142,11 @@ const styles = StyleSheet.create({
     },
     content: {
         flex: 1,
+        zIndex: 10,
     },
     center: {
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
-    },
-    avatarButton: {
-        position: 'absolute',
-        left: 16,
-        width: 32,
-        height: 32,
-        borderRadius: 16,
-        backgroundColor: Theme.colors.buttonBackground,
-        justifyContent: 'center',
-        alignItems: 'center',
-        zIndex: 20,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: Theme.colors.buttonBorder,
-    },
-    leaderboardButton: {
-        position: 'absolute',
-        right: 16,
-        width: 32,
-        height: 32,
-        borderRadius: 16,
-        backgroundColor: Theme.colors.buttonBackground,
-        justifyContent: 'center',
-        alignItems: 'center',
-        zIndex: 20,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: Theme.colors.buttonBorder,
-    },
-    leaderboardIcon: {
-        fontSize: 14,
-    },
-    fab: {
-        position: 'absolute',
-        alignSelf: 'center',
-        width: 56,
-        height: 56,
-        borderRadius: 28,
-        zIndex: 20,
-        overflow: 'hidden',
-    },
-    fabGlass: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-        borderRadius: 28,
     },
 });

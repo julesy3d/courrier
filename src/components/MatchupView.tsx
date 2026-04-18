@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { View, Text, StyleSheet, Dimensions } from 'react-native';
 import Reanimated, {
     SharedValue,
@@ -110,9 +110,10 @@ interface MatchupViewProps {
     initialCardB: Card;
     onJudged: () => void;
     onPhaseChange?: (phase: Phase) => void;
+    onMatchupChanged?: (a: Card, b: Card) => void;
 }
 
-export default function MatchupView({ initialCardA, initialCardB, onJudged, onPhaseChange }: MatchupViewProps) {
+export default function MatchupView({ initialCardA, initialCardB, onJudged, onPhaseChange, onMatchupChanged }: MatchupViewProps) {
     const { reportJudgment, popChallenger } = useStore();
     const hasJudgedRef = useRef(false);
     const [containerHeight, setContainerHeight] = useState(SCREEN_HEIGHT);
@@ -134,6 +135,11 @@ export default function MatchupView({ initialCardA, initialCardB, onJudged, onPh
 
     // Ghost overlay: the yeeted card flies away on top while the new challenger appears underneath
     const [ghost, setGhost] = useState<{ card: Card; slot: 'top' | 'bottom' } | null>(null);
+
+    // Report current pair up so the parent can persist it across tab remounts
+    useEffect(() => {
+        onMatchupChanged?.(topCard, bottomCard);
+    }, [topCard, bottomCard, onMatchupChanged]);
 
     // Track which slot is being yeeted as a shared value (NOT React state).
     const yeetingSlotSV = useSharedValue(YEET_NONE);

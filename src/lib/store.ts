@@ -79,6 +79,10 @@ interface CardsStore {
 
     // --- Heartbeat ---
     heartbeat: () => Promise<void>;
+
+    // --- UI ---
+    showCamera: boolean;
+    setShowCamera: (show: boolean) => void;
 }
 
 // ═══════════════════════════════════════════════
@@ -95,6 +99,9 @@ export const useStore = create<CardsStore>()(
             cardPool: [],
             poolExcludeIds: [],
             isPoolFetching: false,
+            showCamera: false,
+
+            setShowCamera: (show: boolean) => set({ showCamera: show }),
 
             // --- Auth (unchanged) ---
             signInAnonymously: async () => {
